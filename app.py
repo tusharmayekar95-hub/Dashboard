@@ -15,18 +15,21 @@ st.set_page_config(
 )
 
 # =====================================================
-# THEME
+# THEME — matched to Tyaani's brand aesthetic (deep maroon / gold / ivory,
+# typical of 22KT gold Polki bridal jewellery branding). Variable names
+# kept as NAVY/NAVY_SOFT for compatibility with the rest of the file —
+# they now hold maroon tones instead of navy.
 # =====================================================
-NAVY = "#10243E"
-NAVY_SOFT = "#1E3A5F"
-GOLD = "#C9A227"
+NAVY = "#5C1A2B"        # deep maroon/wine — primary brand color
+NAVY_SOFT = "#7A2E3F"    # lighter maroon — gradients, secondary elements
+GOLD = "#C9A227"         # gold — unchanged, matches 22KT gold branding
 GOLD_SOFT = "#E3C567"
-GRAY = "#9AA5B1"
-GRAY_LIGHT = "#E7E5E0"
-BG = "#F7F6F3"
+GRAY = "#A08972"         # warm taupe (replaces cool gray)
+GRAY_LIGHT = "#EDE3D8"   # warm ivory border tone
+BG = "#FBF7F0"           # warm ivory page background
 CARD_BG = "#FFFFFF"
-TEXT_MUTED = "#6B7280"
-GOOD = "#1E7B4D"
+TEXT_MUTED = "#7A6A5D"   # warm gray-brown (replaces cool gray)
+GOOD = "#2F7D4F"
 BAD = "#B3413A"
 
 FONT = "'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
@@ -165,7 +168,7 @@ st.markdown(
         section[data-testid="stSidebar"] h1,
         section[data-testid="stSidebar"] h2,
         section[data-testid="stSidebar"] h3 {{
-            color: #EDEFF2 !important;
+            color: #F3E9DD !important;
         }}
         section[data-testid="stSidebar"] .stSelectbox label {{
             color: {GOLD_SOFT} !important;
@@ -569,7 +572,7 @@ with tab_store:
         if not by_city.empty:
             fig_city = px.pie(
                 by_city, names="City", values="Net Amount", hole=0.55,
-                color_discrete_sequence=[NAVY, GOLD, NAVY_SOFT, GOLD_SOFT, GRAY, "#4A6482", "#B7A75D", "#7C8B9C"],
+                color_discrete_sequence=[NAVY, GOLD, NAVY_SOFT, GOLD_SOFT, GRAY, "#8B4049", "#D9BB6F", "#B89A85"],
             )
             fig_city.update_traces(textfont_size=11.5, marker_line_width=1, marker_line_color="white")
             st.plotly_chart(style_fig(fig_city, show_legend=True), use_container_width=True)
