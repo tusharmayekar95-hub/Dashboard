@@ -270,6 +270,14 @@ def highlight_top(fig, values, top_color=GOLD, base_color=NAVY_SOFT):
     return fig
 
 
+CR = 10_000_000  # 1 Crore = 1,00,00,000
+
+
+def to_cr(series):
+    """Convert a raw rupee series/value to Crores for chart display."""
+    return series / CR
+
+
 # =====================================================
 # LOAD DATA — Google Sheets via service account (gspread)
 # =====================================================
@@ -278,6 +286,9 @@ SALES_GID = "2003103498"
 
 WALKINS_SHEET_ID = "1BT9XC4oIpgTotOGoVOSUTGoR5Je3gmePifYhRqgGSI4"
 WALKINS_GID = "2003103498"
+
+TARGETS_SHEET_ID = "1VIvFZkAezRoQzqny-EE8-QMbzLCBsWlOtPnIaFbpQAA"
+TARGETS_GID = "0"
 
 
 def _get_worksheet(spreadsheet, gid):
@@ -294,6 +305,34 @@ def _get_worksheet(spreadsheet, gid):
     return spreadsheet.sheet1
 
 
+def _melt_targets(df):
+    """Reshape the Targets sheet from its actual wide layout —
+    one row per Store, one column per Month (e.g. 'Apr-25'), plus a
+    trailing 'Total' column and a 'TOTAL' row — into a clean long
+    format: Store | Month_Label | Month_Sort | Target."""
+    df = df.copy()
+    store_col = df.columns[0]  # e.g. "Store Targets"
+    df = df.rename(columns={store_col: "Store"})
+    df["Store"] = df["Store"].astype(str).str.strip()
+
+    # Drop the aggregate "TOTAL" row
+    df = df[~df["Store"].str.upper().isin(["TOTAL", "GRAND TOTAL", ""])]
+
+    # Every column except Store and any "Total" column is a month column
+    month_cols = [
+        c for c in df.columns
+        if c != "Store" and str(c).strip().lower() != "total"
+    ]
+
+    melted = df.melt(id_vars=["Store"], value_vars=month_cols, var_name="Month_Label", value_name="Target")
+    melted["Month_Label"] = melted["Month_Label"].astype(str).str.strip()
+    melted["Target"] = pd.to_numeric(melted["Target"], errors="coerce").fillna(0)
+    melted["_ParsedMonth"] = pd.to_datetime(melted["Month_Label"], format="%b-%y", errors="coerce")
+    melted = melted.dropna(subset=["_ParsedMonth"])
+    melted["Month_Sort"] = melted["_ParsedMonth"].dt.strftime("%Y-%m")
+    return melted[["Store", "Month_Label", "Month_Sort", "Target"]]
+
+
 @st.cache_data(ttl=300)  # re-fetch from Google Sheets at most every 5 minutes
 def load_data():
     creds = Credentials.from_service_account_info(
@@ -304,17 +343,21 @@ def load_data():
 
     sales_ss = client.open_by_key(SALES_SHEET_ID)
     walkins_ss = client.open_by_key(WALKINS_SHEET_ID)
+    targets_ss = client.open_by_key(TARGETS_SHEET_ID)
 
     sales_ws = _get_worksheet(sales_ss, SALES_GID)
     walkins_ws = _get_worksheet(walkins_ss, WALKINS_GID)
+    targets_ws = _get_worksheet(targets_ss, TARGETS_GID)
 
     sales = get_as_dataframe(sales_ws, evaluate_formulas=True)
     walkins = get_as_dataframe(walkins_ws, evaluate_formulas=True)
+    targets_raw = get_as_dataframe(targets_ws, evaluate_formulas=True)
 
     # get_as_dataframe pulls in the sheet's full grid, including trailing
     # empty rows/columns beyond your actual data — drop both.
     sales = sales.dropna(how="all").dropna(axis=1, how="all")
     walkins = walkins.dropna(how="all").dropna(axis=1, how="all")
+    targets_raw = targets_raw.dropna(how="all").dropna(axis=1, how="all")
 
     sales["Date"] = pd.to_datetime(sales["Date"], errors="coerce")
     sales["Year"] = sales["Date"].dt.year
@@ -328,20 +371,21 @@ def load_data():
     walkins["Month_Label"] = walkins["Date"].dt.strftime("%b-%y")
     walkins["Month_Sort"] = walkins["Date"].dt.strftime("%Y-%m")
 
-    return sales, walkins
+    targets = _melt_targets(targets_raw)
+
+    return sales, walkins, targets
 
 
 try:
-    sales, walkins = load_data()
+    sales, walkins, targets = load_data()
 except Exception as e:
     st.error(
         f"Could not load data from Google Sheets: {e}\n\n"
         "Check that:\n"
         "1. `.streamlit/secrets.toml` has a `[gcp_service_account]` section "
         "with your service account's JSON key.\n"
-        "2. Both sheets are shared with the service account's email "
-        "(the `client_email` field in your key file) — or shared as "
-        "'Anyone with the link can view'.\n"
+        "2. All three sheets (Sales, Walk-ins, Targets) are shared with the "
+        "service account's email (the `client_email` field in your key file).\n"
         "3. The sheet IDs / gid values at the top of `load_data()` are correct."
     )
     st.stop()
@@ -373,6 +417,7 @@ selected_month = st.sidebar.selectbox("Month", months)
 st.sidebar.markdown("---")
 st.sidebar.caption(f"Sales rows loaded: {len(sales):,}")
 st.sidebar.caption(f"Walk-in rows loaded: {len(walkins):,}")
+st.sidebar.caption(f"Target rows loaded: {len(targets):,}")
 st.sidebar.caption("Data auto-refreshes every 5 min.")
 if st.sidebar.button("🔄 Refresh data now"):
     st.cache_data.clear()
@@ -459,6 +504,26 @@ if last_year_sales > 0:
 else:
     yoy_display = "N/A"
 
+# ---------------- TARGET & ACHIEVEMENT (same Store + Month scope as net_sales) ----------------
+target_scope = targets.copy()
+if selected_store != "All":
+    target_scope = target_scope[target_scope["Store"] == selected_store]
+if selected_month != "All":
+    target_scope = target_scope[target_scope["Month_Label"] == selected_month]
+
+period_target = target_scope["Target"].sum()
+
+if period_target > 0:
+    achievement_pct = net_sales / period_target * 100
+    surplus = net_sales - period_target
+    achievement_display = f"{achievement_pct:.1f}%"
+    surplus_display = f"{'+' if surplus >= 0 else '-'}₹{abs(surplus):,.0f}"
+    target_display = f"₹{period_target:,.0f}"
+else:
+    achievement_display = "N/A"
+    surplus_display = "N/A"
+    target_display = "N/A"
+
 # =====================================================
 # KPI CARDS
 # =====================================================
@@ -484,17 +549,25 @@ render_kpi(r3[1], "🆕", "New Customers", f"{new_customers:,}")
 render_kpi(r3[2], "👥", "Repeat Customers", f"{repeat_customers:,}")
 
 st.write("")
+
+r4 = st.columns(3)
+render_kpi(r4[0], "🎯", "Target", target_display)
+render_kpi(r4[1], "🏆", "Achievement %", achievement_display)
+render_kpi(r4[2], "⚖️", "Surplus / Shortfall", surplus_display)
+
+st.write("")
 st.markdown("---")
 
 # =====================================================
 # TABS
 # =====================================================
-tab_trend, tab_store, tab_month_yoy, tab_assoc, tab_data = st.tabs(
+tab_trend, tab_store, tab_month_yoy, tab_assoc, tab_walkin, tab_data = st.tabs(
     [
         "📈 Trends",
         "🏬 Store & City Breakdown",
         "📆 Month vs Last Year",
         "🧑‍💼 Sales Associate",
+        "🚶 Walk-in Summary",
         "📄 Raw Data",
     ]
 )
@@ -511,21 +584,26 @@ with tab_trend:
         .sum()
         .sort_values("Month_Sort")
     )
+    monthly_trend["Net Sales (₹ Cr)"] = to_cr(monthly_trend["Net Amount"])
 
     if not monthly_trend.empty:
         fig_trend = px.area(
             monthly_trend,
             x="Month_Label",
-            y="Net Amount",
+            y="Net Sales (₹ Cr)",
             markers=True,
-            labels={"Month_Label": "Month", "Net Amount": "Net Sales (₹)"},
+            labels={"Month_Label": "Month"},
         )
         fig_trend.update_traces(
-            line_color=NAVY, fillcolor="rgba(16,36,62,0.08)",
+            line_color=NAVY, fillcolor="rgba(92,26,43,0.10)",
             marker=dict(color=GOLD, size=7),
         )
         fig_trend.update_layout(hovermode="x unified")
-        st.plotly_chart(style_fig(fig_trend, show_legend=False), use_container_width=True)
+        fig_trend.update_yaxes(tickformat=",.1f")
+        st.plotly_chart(
+            style_fig(fig_trend, show_legend=False, category_count=len(monthly_trend)),
+            use_container_width=True,
+        )
     else:
         st.info("No sales data available for this selection.")
 
@@ -539,7 +617,10 @@ with tab_trend:
     if not monthly_invoices.empty:
         fig_inv = px.bar(monthly_invoices, x="Month_Label", y="Invoices", labels={"Month_Label": "Month"})
         fig_inv = highlight_top(fig_inv, monthly_invoices["Invoices"].tolist())
-        st.plotly_chart(style_fig(fig_inv, show_legend=False), use_container_width=True)
+        st.plotly_chart(
+            style_fig(fig_inv, show_legend=False, category_count=len(monthly_invoices)),
+            use_container_width=True,
+        )
 
 # ---------------- TAB 2: STORE / CITY BREAKDOWN ----------------
 with tab_store:
@@ -552,9 +633,11 @@ with tab_store:
             .sum()
             .sort_values("Net Amount", ascending=False)
         )
+        by_store["Net Sales (₹ Cr)"] = to_cr(by_store["Net Amount"])
         if not by_store.empty:
-            fig_store = px.bar(by_store, x="Store", y="Net Amount", labels={"Net Amount": "Net Sales (₹)"})
-            fig_store = highlight_top(fig_store, by_store["Net Amount"].tolist())
+            fig_store = px.bar(by_store, x="Store", y="Net Sales (₹ Cr)")
+            fig_store.update_yaxes(tickformat=",.1f")
+            fig_store = highlight_top(fig_store, by_store["Net Sales (₹ Cr)"].tolist())
             st.plotly_chart(
                 style_fig(fig_store, show_legend=False, category_count=len(by_store)),
                 use_container_width=True,
@@ -569,9 +652,10 @@ with tab_store:
             .sum()
             .sort_values("Net Amount", ascending=False)
         )
+        by_city["Net Sales (₹ Cr)"] = to_cr(by_city["Net Amount"])
         if not by_city.empty:
             fig_city = px.pie(
-                by_city, names="City", values="Net Amount", hole=0.55,
+                by_city, names="City", values="Net Sales (₹ Cr)", hole=0.55,
                 color_discrete_sequence=[NAVY, GOLD, NAVY_SOFT, GOLD_SOFT, GRAY, "#8B4049", "#D9BB6F", "#B89A85"],
             )
             fig_city.update_traces(textfont_size=11.5, marker_line_width=1, marker_line_color="white")
@@ -591,7 +675,10 @@ with tab_store:
                 nr_store, x="Store", y="Customers", color="New/Repeat", barmode="group",
                 color_discrete_map={"New": NAVY, "Repeat": GOLD},
             )
-            st.plotly_chart(style_fig(fig_nr, show_legend=True), use_container_width=True)
+            st.plotly_chart(
+                style_fig(fig_nr, show_legend=True, category_count=nr_store["Store"].nunique()),
+                use_container_width=True,
+            )
 
 # ---------------- TAB 3: MONTH VS SAME MONTH LAST YEAR ----------------
 with tab_month_yoy:
@@ -683,13 +770,13 @@ with tab_month_yoy:
         st.markdown('<div class="section-kicker">Net Sales Comparison</div>', unsafe_allow_html=True)
         chart_df = pd.DataFrame({
             "Period": [this_label, last_label],
-            "Net Sales": [this_kpi["net"], last_kpi["net"]],
+            "Net Sales (₹ Cr)": [to_cr(this_kpi["net"]), to_cr(last_kpi["net"])],
         })
-        fig_month_compare = px.bar(chart_df, x="Period", y="Net Sales", color="Period", text_auto=".2s",
+        fig_month_compare = px.bar(chart_df, x="Period", y="Net Sales (₹ Cr)", color="Period", text_auto=".2f",
                                     color_discrete_map={this_label: GOLD, last_label: NAVY_SOFT})
+        fig_month_compare.update_yaxes(tickformat=",.1f")
         st.plotly_chart(style_fig(fig_month_compare, show_legend=False), use_container_width=True)
 
-# ---------------- TAB 4: SALES ASSOCIATE DASHBOARD ----------------
 with tab_assoc:
     st.markdown('<div class="section-kicker">Sales Associate Performance</div>', unsafe_allow_html=True)
     st.caption("Respects the Store and Month filters in the sidebar.")
@@ -744,8 +831,10 @@ with tab_assoc:
             col_a, col_b = st.columns(2)
             with col_a:
                 st.markdown('<div class="section-kicker">Net Sales by Associate</div>', unsafe_allow_html=True)
-                fig_assoc_sales = px.bar(summary, x=assoc_col, y="Net_Sales", labels={"Net_Sales": "Net Sales (₹)"})
-                fig_assoc_sales = highlight_top(fig_assoc_sales, summary["Net_Sales"].tolist())
+                summary["Net Sales (₹ Cr)"] = to_cr(summary["Net_Sales"])
+                fig_assoc_sales = px.bar(summary, x=assoc_col, y="Net Sales (₹ Cr)")
+                fig_assoc_sales.update_yaxes(tickformat=",.2f")
+                fig_assoc_sales = highlight_top(fig_assoc_sales, summary["Net Sales (₹ Cr)"].tolist())
                 st.plotly_chart(
                     style_fig(fig_assoc_sales, show_legend=False, category_count=len(summary)),
                     use_container_width=True,
@@ -799,7 +888,139 @@ with tab_assoc:
             display_summary = display_summary.rename(columns={"Net_Sales": "Net Sales"})
             st.dataframe(display_summary, use_container_width=True, hide_index=True)
 
-# ---------------- TAB 5: RAW DATA ----------------
+# ---------------- TAB 5: WALK-IN SUMMARY ----------------
+with tab_walkin:
+    st.markdown('<div class="section-kicker">Walk-in Summary</div>', unsafe_allow_html=True)
+    st.caption(
+        "Respects the Store and Month filters in the sidebar. Conversion = unique "
+        "'Matched' walk-ins ÷ total unique walk-ins. New/Repeat uses the same logic as the Sales tabs."
+    )
+
+    walkin_new = filtered_walkins[filtered_walkins["New/Repeat"] == "New"]["Helper"].nunique()
+    walkin_repeat = filtered_walkins[filtered_walkins["New/Repeat"] == "Repeat"]["Helper"].nunique()
+    walkin_repeat_share = (
+        walkin_repeat / (walkin_new + walkin_repeat) * 100
+        if (walkin_new + walkin_repeat) > 0 else 0
+    )
+
+    # total_walkins, matched_walkins, conversion are already computed globally
+    # from filtered_walkins using the same "unique cust count WRT num&Nam" == 1
+    # de-duplication rule — reused here for consistency.
+    wr1 = st.columns(3)
+    render_kpi(wr1[0], "🚶", "Total Unique Walk-ins", f"{total_walkins:,}")
+    render_kpi(wr1[1], "✅", "Matched (Converted)", f"{matched_walkins:,}")
+    render_kpi(wr1[2], "🎯", "Conversion %", f"{conversion:.1f}%")
+
+    st.write("")
+
+    wr2 = st.columns(3)
+    render_kpi(wr2[0], "🆕", "New Walk-ins", f"{walkin_new:,}")
+    render_kpi(wr2[1], "🔁", "Repeat Walk-ins", f"{walkin_repeat:,}")
+    render_kpi(wr2[2], "📊", "Repeat Share %", f"{walkin_repeat_share:.1f}%")
+
+    st.write("")
+    st.markdown("---")
+
+    col_a, col_b = st.columns(2)
+
+    with col_a:
+        st.markdown('<div class="section-kicker">Walk-ins by Store</div>', unsafe_allow_html=True)
+        walkin_by_store = (
+            filtered_walkins[filtered_walkins["unique cust count WRT num&Nam"] == 1]
+            .groupby("Store")["Helper"]
+            .nunique()
+            .reset_index(name="Walk-ins")
+            .sort_values("Walk-ins", ascending=False)
+        )
+        if not walkin_by_store.empty:
+            fig_walkin_store = px.bar(walkin_by_store, x="Store", y="Walk-ins")
+            fig_walkin_store = highlight_top(fig_walkin_store, walkin_by_store["Walk-ins"].tolist())
+            st.plotly_chart(
+                style_fig(fig_walkin_store, show_legend=False, category_count=len(walkin_by_store)),
+                use_container_width=True,
+            )
+        else:
+            st.info("No walk-in data for this selection.")
+
+    with col_b:
+        st.markdown('<div class="section-kicker">New vs Repeat Walk-ins by Store</div>', unsafe_allow_html=True)
+        nr_walkin_store = (
+            filtered_walkins.groupby(["Store", "New/Repeat"])["Helper"]
+            .nunique()
+            .reset_index(name="Walk-ins")
+        )
+        if not nr_walkin_store.empty:
+            fig_nr_walkin = px.bar(
+                nr_walkin_store, x="Store", y="Walk-ins", color="New/Repeat", barmode="group",
+                color_discrete_map={"New": NAVY, "Repeat": GOLD},
+            )
+            st.plotly_chart(
+                style_fig(fig_nr_walkin, show_legend=True, category_count=nr_walkin_store["Store"].nunique()),
+                use_container_width=True,
+            )
+        else:
+            st.info("No walk-in data for this selection.")
+
+    st.markdown('<div class="section-kicker">Monthly Walk-in Trend</div>', unsafe_allow_html=True)
+    walkin_trend_source = walkins.copy()
+    if selected_store != "All":
+        walkin_trend_source = walkin_trend_source[walkin_trend_source["Store"] == selected_store]
+
+    walkin_monthly = (
+        walkin_trend_source[walkin_trend_source["unique cust count WRT num&Nam"] == 1]
+        .groupby(["Month_Sort", "Month_Label"])["Helper"]
+        .nunique()
+        .reset_index(name="Walk-ins")
+        .sort_values("Month_Sort")
+    )
+    if not walkin_monthly.empty:
+        fig_walkin_trend = px.area(walkin_monthly, x="Month_Label", y="Walk-ins", markers=True)
+        fig_walkin_trend.update_traces(
+            line_color=NAVY, fillcolor="rgba(92,26,43,0.10)",
+            marker=dict(color=GOLD, size=7),
+        )
+        fig_walkin_trend.update_layout(hovermode="x unified")
+        st.plotly_chart(
+            style_fig(fig_walkin_trend, show_legend=False, category_count=len(walkin_monthly)),
+            use_container_width=True,
+        )
+    else:
+        st.info("No walk-in data available for this selection.")
+
+    st.markdown('<div class="section-kicker">Store-wise Breakdown</div>', unsafe_allow_html=True)
+    store_summary = (
+        filtered_walkins[filtered_walkins["unique cust count WRT num&Nam"] == 1]
+        .groupby("Store")
+        .agg(Total_Walkins=("Helper", "nunique"))
+        .reset_index()
+    )
+    matched_by_store = (
+        filtered_walkins[
+            (filtered_walkins["Sales Matched"] == "Matched") &
+            (filtered_walkins["unique cust count WRT num&Nam"] == 1)
+        ]
+        .groupby("Store")["Helper"]
+        .nunique()
+        .reset_index(name="Matched")
+    )
+    store_summary = store_summary.merge(matched_by_store, on="Store", how="left")
+    store_summary["Matched"] = store_summary["Matched"].fillna(0).astype(int)
+    store_summary["Conversion %"] = (
+        store_summary["Matched"] / store_summary["Total_Walkins"] * 100
+    ).round(1)
+
+    nr_by_store = (
+        filtered_walkins.groupby(["Store", "New/Repeat"])["Helper"]
+        .nunique()
+        .unstack(fill_value=0)
+        .reset_index()
+    )
+    store_summary = store_summary.merge(nr_by_store, on="Store", how="left")
+    store_summary = store_summary.rename(columns={"Total_Walkins": "Total Walk-ins"})
+    store_summary = store_summary.sort_values("Total Walk-ins", ascending=False)
+    st.dataframe(store_summary, use_container_width=True, hide_index=True)
+
+# ---------------- TAB 6: RAW DATA ----------------
 with tab_data:
     st.markdown('<div class="section-kicker">Sales Data</div>', unsafe_allow_html=True)
     st.dataframe(filtered_sales, use_container_width=True, hide_index=True)
