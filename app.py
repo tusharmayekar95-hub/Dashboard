@@ -184,6 +184,18 @@ st.markdown(
             color: {NAVY} !important;
             fill: {NAVY} !important;
         }}
+        section[data-testid="stSidebar"] button {{
+            background-color: rgba(255,255,255,0.08) !important;
+            border: 1px solid {GOLD_SOFT} !important;
+            color: {GOLD_SOFT} !important;
+            border-radius: 10px !important;
+            font-weight: 600 !important;
+        }}
+        section[data-testid="stSidebar"] button:hover {{
+            background-color: rgba(201,162,39,0.18) !important;
+            border-color: {GOLD} !important;
+            color: white !important;
+        }}
     </style>
     """,
     unsafe_allow_html=True
@@ -256,12 +268,50 @@ def highlight_top(fig, values, top_color=GOLD, base_color=NAVY_SOFT):
 
 
 # =====================================================
-# LOAD DATA
+# LOAD DATA — Google Sheets via service account (gspread)
 # =====================================================
-@st.cache_data
+SALES_SHEET_ID = "18pTb4qEZe4HtioClGzUGtZwvfY7wVs-4yT-PSgZinps"
+SALES_GID = "2003103498"
+
+WALKINS_SHEET_ID = "1BT9XC4oIpgTotOGoVOSUTGoR5Je3gmePifYhRqgGSI4"
+WALKINS_GID = "2003103498"
+
+
+def _get_worksheet(spreadsheet, gid):
+    """Open the exact tab matching the gid from the sheet's URL, not just the
+    first tab — .sheet1 silently reads the wrong data if Sales/Walk-ins
+    aren't on the first tab of their spreadsheet."""
+    try:
+        return spreadsheet.get_worksheet_by_id(int(gid))
+    except Exception:
+        for ws in spreadsheet.worksheets():
+            if str(ws.id) == str(gid):
+                return ws
+    # Fall back to the first tab only if the gid truly can't be found
+    return spreadsheet.sheet1
+
+
+@st.cache_data(ttl=300)  # re-fetch from Google Sheets at most every 5 minutes
 def load_data():
-    sales = pd.read_excel("Data/Sales.xlsx")
-    walkins = pd.read_excel("Data/Walk-ins.xlsx")
+    creds = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"],
+        scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
+    )
+    client = gspread.authorize(creds)
+
+    sales_ss = client.open_by_key(SALES_SHEET_ID)
+    walkins_ss = client.open_by_key(WALKINS_SHEET_ID)
+
+    sales_ws = _get_worksheet(sales_ss, SALES_GID)
+    walkins_ws = _get_worksheet(walkins_ss, WALKINS_GID)
+
+    sales = get_as_dataframe(sales_ws, evaluate_formulas=True)
+    walkins = get_as_dataframe(walkins_ws, evaluate_formulas=True)
+
+    # get_as_dataframe pulls in the sheet's full grid, including trailing
+    # empty rows/columns beyond your actual data — drop both.
+    sales = sales.dropna(how="all").dropna(axis=1, how="all")
+    walkins = walkins.dropna(how="all").dropna(axis=1, how="all")
 
     sales["Date"] = pd.to_datetime(sales["Date"], errors="coerce")
     sales["Year"] = sales["Date"].dt.year
@@ -280,11 +330,16 @@ def load_data():
 
 try:
     sales, walkins = load_data()
-except FileNotFoundError as e:
+except Exception as e:
     st.error(
-        f"Could not find a data file: {e}\n\n"
-        "Make sure `Data/Sales.xlsx` and `Data/Walk-ins.xlsx` exist relative "
-        "to this script (or update the paths in `load_data()`)."
+        f"Could not load data from Google Sheets: {e}\n\n"
+        "Check that:\n"
+        "1. `.streamlit/secrets.toml` has a `[gcp_service_account]` section "
+        "with your service account's JSON key.\n"
+        "2. Both sheets are shared with the service account's email "
+        "(the `client_email` field in your key file) — or shared as "
+        "'Anyone with the link can view'.\n"
+        "3. The sheet IDs / gid values at the top of `load_data()` are correct."
     )
     st.stop()
 
@@ -315,6 +370,10 @@ selected_month = st.sidebar.selectbox("Month", months)
 st.sidebar.markdown("---")
 st.sidebar.caption(f"Sales rows loaded: {len(sales):,}")
 st.sidebar.caption(f"Walk-in rows loaded: {len(walkins):,}")
+st.sidebar.caption("Data auto-refreshes every 5 min.")
+if st.sidebar.button("🔄 Refresh data now"):
+    st.cache_data.clear()
+    st.rerun()
 
 
 def apply_filters(df):
