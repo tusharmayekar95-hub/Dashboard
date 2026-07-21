@@ -334,6 +334,39 @@ def _melt_targets(df):
 
 
 @st.cache_data(ttl=300)  # re-fetch from Google Sheets at most every 5 minutes
+def _clean_team_targets(df):
+    """Clean the 'Team Target' tab: Store Name | Agent Name | Target | Month-YY
+    (already long-format, one row per Agent+Month — no reshaping needed,
+    just standardize column names and parse the month)."""
+    df = df.copy()
+    rename_map = {}
+    for c in df.columns:
+        cl = str(c).strip().lower()
+        if cl in ("store name", "store"):
+            rename_map[c] = "Store"
+        elif cl in ("agent name", "agent"):
+            rename_map[c] = "Agent"
+        elif cl == "target":
+            rename_map[c] = "Target"
+        elif cl in ("month-yy", "month", "month_label", "month-year"):
+            rename_map[c] = "Month_Label"
+    df = df.rename(columns=rename_map)
+
+    required = {"Store", "Agent", "Target", "Month_Label"}
+    if not required.issubset(df.columns):
+        return None  # signals the caller that the tab's structure didn't match
+
+    df["Store"] = df["Store"].astype(str).str.strip()
+    df["Agent"] = df["Agent"].astype(str).str.strip()
+    df["Month_Label"] = df["Month_Label"].astype(str).str.strip()
+    df["Target"] = pd.to_numeric(df["Target"], errors="coerce").fillna(0)
+    df = df[(df["Agent"] != "") & (df["Agent"].str.lower() != "nan")]
+    df["_ParsedMonth"] = pd.to_datetime(df["Month_Label"], format="%b-%y", errors="coerce")
+    df = df.dropna(subset=["_ParsedMonth"])
+    df["Month_Sort"] = df["_ParsedMonth"].dt.strftime("%Y-%m")
+    return df[["Store", "Agent", "Month_Label", "Month_Sort", "Target"]]
+
+
 def load_data():
     creds = Credentials.from_service_account_info(
         st.secrets["gcp_service_account"],
@@ -373,11 +406,25 @@ def load_data():
 
     targets = _melt_targets(targets_raw)
 
-    return sales, walkins, targets
+    # Team Target lives on a separate tab within the same spreadsheet —
+    # fetch by tab NAME rather than gid, since gspread supports that
+    # directly and we don't have to guess a gid number.
+    team_targets = pd.DataFrame(columns=["Store", "Agent", "Month_Label", "Month_Sort", "Target"])
+    try:
+        team_target_ws = targets_ss.worksheet("Team Target")
+        team_targets_raw = get_as_dataframe(team_target_ws, evaluate_formulas=True)
+        team_targets_raw = team_targets_raw.dropna(how="all").dropna(axis=1, how="all")
+        cleaned = _clean_team_targets(team_targets_raw)
+        if cleaned is not None:
+            team_targets = cleaned
+    except gspread.exceptions.WorksheetNotFound:
+        pass  # Team Target tab doesn't exist / was renamed — handled gracefully in the UI
+
+    return sales, walkins, targets, team_targets
 
 
 try:
-    sales, walkins, targets = load_data()
+    sales, walkins, targets, team_targets = load_data()
 except Exception as e:
     st.error(
         f"Could not load data from Google Sheets: {e}\n\n"
@@ -401,7 +448,7 @@ CANDIDATE_ASSOC_KEYWORDS = [
 st.sidebar.markdown("## 💎 Tyaani Analytics")
 st.sidebar.caption("Filter the dashboard")
 
-stores = ["All"] + sorted(sales["Store"].dropna().unique().tolist())
+stores = sorted(sales["Store"].dropna().unique().tolist())
 
 month_lookup = (
     sales[["Month_Label", "Month_Sort"]]
@@ -411,13 +458,17 @@ month_lookup = (
 )
 months = ["All"] + month_lookup["Month_Label"].tolist()
 
-selected_store = st.sidebar.selectbox("Store", stores)
+selected_stores = st.sidebar.multiselect("Store", stores, default=[], placeholder="All stores")
 selected_month = st.sidebar.selectbox("Month", months)
+
+# Display helper: empty selection means "All stores"
+store_display = ", ".join(selected_stores) if selected_stores else "All"
 
 st.sidebar.markdown("---")
 st.sidebar.caption(f"Sales rows loaded: {len(sales):,}")
 st.sidebar.caption(f"Walk-in rows loaded: {len(walkins):,}")
 st.sidebar.caption(f"Target rows loaded: {len(targets):,}")
+st.sidebar.caption(f"Team Target rows loaded: {len(team_targets):,}")
 st.sidebar.caption("Data auto-refreshes every 5 min.")
 if st.sidebar.button("🔄 Refresh data now"):
     st.cache_data.clear()
@@ -426,8 +477,8 @@ if st.sidebar.button("🔄 Refresh data now"):
 
 def apply_filters(df):
     out = df.copy()
-    if selected_store != "All":
-        out = out[out["Store"] == selected_store]
+    if selected_stores:
+        out = out[out["Store"].isin(selected_stores)]
     if selected_month != "All":
         out = out[out["Month_Label"] == selected_month]
     return out
@@ -445,7 +496,7 @@ st.markdown(
         <h1>💎 Tyaani Jewellery — Executive Dashboard</h1>
         <p>Performance overview across stores, months & sales associates</p>
         <div class="filter-pills">
-            <span class="filter-pill">Store: <b>{selected_store}</b></span>
+            <span class="filter-pill">Store: <b>{store_display}</b></span>
             <span class="filter-pill">Month: <b>{selected_month}</b></span>
         </div>
     </div>
@@ -493,8 +544,8 @@ if selected_month != "All":
     previous_year = current_year - 1
 
     prior_year_df = sales[(sales["Month"] == current_month) & (sales["Year"] == previous_year)]
-    if selected_store != "All":
-        prior_year_df = prior_year_df[prior_year_df["Store"] == selected_store]
+    if selected_stores:
+        prior_year_df = prior_year_df[prior_year_df["Store"].isin(selected_stores)]
 
     last_year_sales = prior_year_df["Net Amount"].sum()
 
@@ -506,8 +557,8 @@ else:
 
 # ---------------- TARGET & ACHIEVEMENT (same Store + Month scope as net_sales) ----------------
 target_scope = targets.copy()
-if selected_store != "All":
-    target_scope = target_scope[target_scope["Store"] == selected_store]
+if selected_stores:
+    target_scope = target_scope[target_scope["Store"].isin(selected_stores)]
 if selected_month != "All":
     target_scope = target_scope[target_scope["Month_Label"] == selected_month]
 
@@ -575,8 +626,8 @@ tab_trend, tab_store, tab_month_yoy, tab_assoc, tab_walkin, tab_data = st.tabs(
 # ---------------- TAB 1: TRENDS ----------------
 with tab_trend:
     trend_source = sales.copy()
-    if selected_store != "All":
-        trend_source = trend_source[trend_source["Store"] == selected_store]
+    if selected_stores:
+        trend_source = trend_source[trend_source["Store"].isin(selected_stores)]
 
     st.markdown('<div class="section-kicker">Monthly Net Sales Trend</div>', unsafe_allow_html=True)
     monthly_trend = (
@@ -680,6 +731,41 @@ with tab_store:
                 use_container_width=True,
             )
 
+    st.markdown('<div class="section-kicker">Store-wise Breakdown</div>', unsafe_allow_html=True)
+    store_breakdown = (
+        filtered_sales.groupby("Store")
+        .agg(Net_Sales=("Net Amount", "sum"), Invoices=("Invoice No", "nunique"), Qty=("Qty", "sum"))
+        .reset_index()
+    )
+    store_breakdown["Avg Bill"] = store_breakdown["Net_Sales"] / store_breakdown["Invoices"].replace(0, pd.NA)
+    store_breakdown["UPT"] = store_breakdown["Qty"] / store_breakdown["Invoices"].replace(0, pd.NA)
+
+    if "New/Repeat" in filtered_sales.columns and "Helper" in filtered_sales.columns:
+        nr_pivot = (
+            filtered_sales.groupby(["Store", "New/Repeat"])["Helper"]
+            .nunique()
+            .unstack(fill_value=0)
+            .reset_index()
+        )
+        store_breakdown = store_breakdown.merge(nr_pivot, on="Store", how="left")
+        if "New" in store_breakdown.columns and "Repeat" in store_breakdown.columns:
+            store_breakdown["Repeat %"] = (
+                store_breakdown["Repeat"] / (store_breakdown["New"] + store_breakdown["Repeat"]) * 100
+            ).round(1)
+
+    store_breakdown = store_breakdown.rename(columns={"Net_Sales": "Net Sales"})
+    store_breakdown = store_breakdown.sort_values("Net Sales", ascending=False)
+
+    display_store_breakdown = store_breakdown.copy()
+    display_store_breakdown["Net Sales"] = display_store_breakdown["Net Sales"].apply(lambda v: f"₹{v:,.0f}")
+    display_store_breakdown["Avg Bill"] = display_store_breakdown["Avg Bill"].apply(
+        lambda v: f"₹{v:,.0f}" if pd.notna(v) else "N/A"
+    )
+    display_store_breakdown["UPT"] = display_store_breakdown["UPT"].apply(
+        lambda v: f"{v:.2f}" if pd.notna(v) else "N/A"
+    )
+    st.dataframe(display_store_breakdown, use_container_width=True, hide_index=True)
+
 # ---------------- TAB 3: MONTH VS SAME MONTH LAST YEAR ----------------
 with tab_month_yoy:
     st.markdown('<div class="section-kicker">Month vs Same Month Last Year</div>', unsafe_allow_html=True)
@@ -696,9 +782,9 @@ with tab_month_yoy:
 
         base_sales = sales.copy()
         base_walkins = walkins.copy()
-        if selected_store != "All":
-            base_sales = base_sales[base_sales["Store"] == selected_store]
-            base_walkins = base_walkins[base_walkins["Store"] == selected_store]
+        if selected_stores:
+            base_sales = base_sales[base_sales["Store"].isin(selected_stores)]
+            base_walkins = base_walkins[base_walkins["Store"].isin(selected_stores)]
 
         this_sales = base_sales[(base_sales["Month"] == c_month) & (base_sales["Year"] == c_year)]
         last_sales = base_sales[(base_sales["Month"] == c_month) & (base_sales["Year"] == p_year)]
@@ -888,6 +974,61 @@ with tab_assoc:
             display_summary = display_summary.rename(columns={"Net_Sales": "Net Sales"})
             st.dataframe(display_summary, use_container_width=True, hide_index=True)
 
+            st.markdown('<div class="section-kicker">🎯 Agent Target & Achievement</div>', unsafe_allow_html=True)
+            scope_label = f"Month: {selected_month}" if selected_month != "All" else "Overall (all months)"
+            st.caption(
+                f"From the Team Target sheet. Achievement % = Agent's Net Sales ÷ Agent's Target. "
+                f"Currently showing: {scope_label}."
+            )
+
+            if team_targets.empty:
+                st.info(
+                    "Couldn't load agent-level targets — either the 'Team Target' tab wasn't found in "
+                    "the Targets spreadsheet, its columns don't match Store Name / Agent Name / Target / "
+                    "Month-YY, or it's not shared with the service account yet."
+                )
+            else:
+                agent_sales = (
+                    assoc_sales.groupby(assoc_col)["Net Amount"]
+                    .sum()
+                    .reset_index()
+                    .rename(columns={assoc_col: "Agent", "Net Amount": "Net Sales"})
+                )
+
+                team_target_scope = team_targets.copy()
+                if selected_stores:
+                    team_target_scope = team_target_scope[team_target_scope["Store"].isin(selected_stores)]
+                if selected_month != "All":
+                    team_target_scope = team_target_scope[team_target_scope["Month_Label"] == selected_month]
+
+                agent_target = team_target_scope.groupby("Agent", as_index=False)["Target"].sum()
+
+                agent_ach = pd.merge(agent_sales, agent_target, on="Agent", how="outer").fillna(0)
+                agent_ach["Achievement %"] = agent_ach.apply(
+                    lambda r: round(r["Net Sales"] / r["Target"] * 100, 1) if r["Target"] > 0 else None,
+                    axis=1,
+                )
+                agent_ach = agent_ach.sort_values("Net Sales", ascending=False)
+
+                if agent_ach.empty:
+                    st.info("No agent target data for this selection.")
+                else:
+                    display_agent_ach = agent_ach.copy()
+                    display_agent_ach["Net Sales"] = display_agent_ach["Net Sales"].apply(lambda v: f"₹{v:,.0f}")
+                    display_agent_ach["Target"] = display_agent_ach["Target"].apply(
+                        lambda v: f"₹{v:,.0f}" if v > 0 else "N/A"
+                    )
+                    display_agent_ach["Achievement %"] = display_agent_ach["Achievement %"].apply(
+                        lambda v: f"{v:.1f}%" if pd.notna(v) else "N/A"
+                    )
+                    st.dataframe(display_agent_ach, use_container_width=True, hide_index=True)
+
+                    st.caption(
+                        "Note: this matches Sales-sheet associate names against Team Target's "
+                        "Agent Name exactly. If an agent shows 'N/A' Target despite having sales, "
+                        "double-check the spelling matches between the two sheets."
+                    )
+
 # ---------------- TAB 5: WALK-IN SUMMARY ----------------
 with tab_walkin:
     st.markdown('<div class="section-kicker">Walk-in Summary</div>', unsafe_allow_html=True)
@@ -963,8 +1104,8 @@ with tab_walkin:
 
     st.markdown('<div class="section-kicker">Monthly Walk-in Trend</div>', unsafe_allow_html=True)
     walkin_trend_source = walkins.copy()
-    if selected_store != "All":
-        walkin_trend_source = walkin_trend_source[walkin_trend_source["Store"] == selected_store]
+    if selected_stores:
+        walkin_trend_source = walkin_trend_source[walkin_trend_source["Store"].isin(selected_stores)]
 
     walkin_monthly = (
         walkin_trend_source[walkin_trend_source["unique cust count WRT num&Nam"] == 1]
