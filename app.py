@@ -39,6 +39,10 @@ WALKIN_STORE_COL = "Store"
 WALKIN_NAME_COL = "Customer Name"       # <-- confirm/edit
 WALKIN_PHONE_COL = "Mobile Number"      # <-- confirm/edit
 
+SALES_CATEGORY_COL = "Product Category"  # <-- confirm/edit
+SALES_COLLECTION_COL = "Collection"      # <-- confirm/edit
+SALES_PRICEBAND_COL = "Price band"       # <-- confirm/edit
+
 ASSOC_KEYWORDS = [
     "associate", "executive", "salesperson", "sales person",
     "staff", "employee", "sold by", "sales rep", "advisor",
@@ -311,6 +315,18 @@ def _resolve_col(df, configured_name, keywords, exclude=None):
     return _autodetect_col(df.columns, keywords, exclude)
 
 
+def _find_column_ci(df, name):
+    """Case/whitespace-insensitive exact column match (used for Product
+    Category / Collection / Price band, which don't need keyword guessing)."""
+    if name in df.columns:
+        return name
+    target = name.strip().lower()
+    for c in df.columns:
+        if str(c).strip().lower() == target:
+            return c
+    return None
+
+
 def _normalize_phone(x):
     if pd.isna(x):
         return ""
@@ -407,11 +423,22 @@ sales_phone_col = _resolve_col(sales, SALES_PHONE_COL, PHONE_KEYWORDS)
 walkin_name_col = _resolve_col(walkins, WALKIN_NAME_COL, NAME_KEYWORDS, exclude=["store", "associate"])
 walkin_phone_col = _resolve_col(walkins, WALKIN_PHONE_COL, PHONE_KEYWORDS)
 
+# ---- resolve Product Category / Collection / Price band (Sales only) ----
+category_col = _find_column_ci(sales, SALES_CATEGORY_COL)
+collection_col = _find_column_ci(sales, SALES_COLLECTION_COL)
+priceband_col = _find_column_ci(sales, SALES_PRICEBAND_COL)
+
 missing_cols_warning = []
 if not sales_name_col and not sales_phone_col:
     missing_cols_warning.append("Sales sheet: no Name/Mobile Number column found.")
 if not walkin_name_col and not walkin_phone_col:
     missing_cols_warning.append("Walk-in sheet: no Name/Mobile Number column found.")
+if not collection_col:
+    missing_cols_warning.append(f"Sales sheet: no '{SALES_COLLECTION_COL}' column found — check SALES_COLLECTION_COL.")
+if not priceband_col:
+    missing_cols_warning.append(f"Sales sheet: no '{SALES_PRICEBAND_COL}' column found — check SALES_PRICEBAND_COL.")
+if not category_col:
+    missing_cols_warning.append(f"Sales sheet: no '{SALES_CATEGORY_COL}' column found — check SALES_CATEGORY_COL.")
 
 # ---- build unique customer keys ----
 sales["Customer_Key"] = build_customer_key(sales, sales_name_col, sales_phone_col)
@@ -461,9 +488,30 @@ date_lookup = (
 all_dates = date_lookup["Date_Str"].tolist()
 selected_dates = st.sidebar.multiselect("Date", all_dates, default=[], placeholder="All dates")
 
+date_scoped_sales = month_scoped_sales[month_scoped_sales["Date_Str"].isin(selected_dates)] if selected_dates else month_scoped_sales
+
+if collection_col:
+    collection_options = sorted(date_scoped_sales[collection_col].dropna().unique().tolist())
+    selected_collections = st.sidebar.multiselect("Collection", collection_options, default=[], placeholder="All collections")
+else:
+    selected_collections = []
+
+collection_scoped_sales = (
+    date_scoped_sales[date_scoped_sales[collection_col].isin(selected_collections)]
+    if (collection_col and selected_collections) else date_scoped_sales
+)
+
+if priceband_col:
+    priceband_options = sorted(collection_scoped_sales[priceband_col].dropna().unique().tolist())
+    selected_pricebands = st.sidebar.multiselect("Price Band", priceband_options, default=[], placeholder="All price bands")
+else:
+    selected_pricebands = []
+
 store_display = ", ".join(selected_stores) if selected_stores else "All"
 month_display = ", ".join(selected_months) if selected_months else "All"
 date_display = ", ".join(selected_dates) if selected_dates else "All"
+collection_display = ", ".join(selected_collections) if selected_collections else "All"
+priceband_display = ", ".join(selected_pricebands) if selected_pricebands else "All"
 
 st.sidebar.markdown("---")
 st.sidebar.caption(f"Sales rows loaded: {len(sales):,}")
@@ -484,6 +532,10 @@ def apply_filters(df, store_col, date_str_col="Date_Str"):
         out = out[out["Month_Label"].isin(selected_months)]
     if selected_dates:
         out = out[out[date_str_col].isin(selected_dates)]
+    if collection_col and collection_col in out.columns and selected_collections:
+        out = out[out[collection_col].isin(selected_collections)]
+    if priceband_col and priceband_col in out.columns and selected_pricebands:
+        out = out[out[priceband_col].isin(selected_pricebands)]
     return out
 
 
@@ -502,6 +554,8 @@ st.markdown(
             <span class="filter-pill">Store: <b>{store_display}</b></span>
             <span class="filter-pill">Month: <b>{month_display}</b></span>
             <span class="filter-pill">Date: <b>{date_display}</b></span>
+            <span class="filter-pill">Collection: <b>{collection_display}</b></span>
+            <span class="filter-pill">Price Band: <b>{priceband_display}</b></span>
         </div>
     </div>
     """,
@@ -634,6 +688,67 @@ def format_walkin_table(df, group_col):
     return d[cols_order]
 
 
+def product_metrics_by(df, group_col):
+    """Revenue, Unique Invoice, ATV, UPT, Qty Sold, Unique Customer, New/Repeat
+    counts & %, and Revenue Share % — grouped by a product attribute
+    (Product Category / Collection / Price band). No Target/Ach%/Shortfall
+    here since targets are set at Store level, not product level."""
+    if df.empty or not group_col or group_col not in df.columns:
+        return pd.DataFrame()
+
+    scoped = df.dropna(subset=[group_col])
+    if scoped.empty:
+        return pd.DataFrame()
+
+    out = scoped.groupby(group_col).agg(
+        Revenue=(SALES_NET_COL, "sum"),
+        Unique_Invoice=(SALES_INVOICE_COL, "nunique"),
+        Qty=(SALES_QTY_COL, "sum"),
+    ).reset_index()
+    out["ATV"] = out["Revenue"] / out["Unique_Invoice"].replace(0, np.nan)
+    out["UPT"] = out["Qty"] / out["Unique_Invoice"].replace(0, np.nan)
+
+    uc = scoped.groupby(group_col)["Customer_Key"].nunique().rename("Unique_Customer")
+    out = out.merge(uc, on=group_col, how="left")
+
+    nr = scoped.dropna(subset=["New/Repeat"]).groupby([group_col, "New/Repeat"])["Customer_Key"].nunique().unstack(fill_value=0)
+    for c in ["New", "Repeat"]:
+        if c not in nr.columns:
+            nr[c] = 0
+    nr = nr.rename(columns={"New": "New_Customer_Count", "Repeat": "Repeat_Customer_Count"}).reset_index()
+    out = out.merge(nr, on=group_col, how="left")
+    out["New_Customer_Count"] = out["New_Customer_Count"].fillna(0)
+    out["Repeat_Customer_Count"] = out["Repeat_Customer_Count"].fillna(0)
+    tot_nr = out["New_Customer_Count"] + out["Repeat_Customer_Count"]
+    out["New %"] = (out["New_Customer_Count"] / tot_nr.replace(0, np.nan) * 100).round(1)
+    out["Repeat %"] = (out["Repeat_Customer_Count"] / tot_nr.replace(0, np.nan) * 100).round(1)
+
+    total_rev = out["Revenue"].sum()
+    out["Revenue Share %"] = (out["Revenue"] / total_rev * 100).round(1) if total_rev > 0 else None
+
+    return out.sort_values("Revenue", ascending=False)
+
+
+def format_product_table(df, group_col):
+    d = df.copy()
+    d = d.rename(columns={
+        "Unique_Invoice": "Unique Invoice", "Unique_Customer": "Unique Customer",
+        "New_Customer_Count": "New Customer Count", "Repeat_Customer_Count": "Repeat Customer Count",
+        "Qty": "Qty Sold",
+    })
+    d["Revenue"] = d["Revenue"].apply(fmt_money)
+    d["ATV"] = d["ATV"].apply(lambda v: f"₹{v:,.0f}" if pd.notna(v) else "N/A")
+    d["UPT"] = d["UPT"].apply(lambda v: f"{v:.2f}" if pd.notna(v) else "N/A")
+    for col in ["New %", "Repeat %", "Revenue Share %"]:
+        if col in d.columns:
+            d[col] = d[col].apply(fmt_pct)
+    cols_order = [c for c in [
+        group_col, "Revenue", "Revenue Share %", "Unique Invoice", "ATV", "UPT", "Qty Sold",
+        "Unique Customer", "New Customer Count", "Repeat Customer Count", "New %", "Repeat %",
+    ] if c in d.columns]
+    return d[cols_order]
+
+
 # =====================================================
 # GLOBAL KPI CALCULATIONS (current filter scope)
 # =====================================================
@@ -735,8 +850,8 @@ st.markdown("---")
 # =====================================================
 # TABS
 # =====================================================
-tab_trends, tab_sales, tab_walkin, tab_yoy, tab_raw = st.tabs(
-    ["📈 Trends Charts", "🏬 Sales Tab", "🚶 Walkin Tab", "📆 Same Month Vs Last Yr", "📄 Raw Data"]
+tab_trends, tab_sales, tab_walkin, tab_product, tab_yoy, tab_raw = st.tabs(
+    ["📈 Trends Charts", "🏬 Sales Tab", "🚶 Walkin Tab", "🏷️ Product Mix", "📆 Same Month Vs Last Yr", "📄 Raw Data"]
 )
 
 # ---------------- TRENDS CHARTS ----------------
@@ -845,6 +960,41 @@ with tab_walkin:
         else:
             st.dataframe(format_walkin_table(w_assoc_table.sort_values("Total_Unique_Walkin", ascending=False), w_assoc_col),
                          use_container_width=True, hide_index=True)
+
+# ---------------- PRODUCT MIX (Category / Collection / Price band) ----------------
+with tab_product:
+    st.caption("Respects the Store, Month, Date, Collection and Price Band filters in the sidebar.")
+
+    def _render_product_section(title, col):
+        st.markdown(f'<div class="section-kicker">{title}</div>', unsafe_allow_html=True)
+        if not col:
+            st.warning(
+                f"Couldn't find this column in the Sales sheet. Available columns: "
+                + ", ".join(map(str, sales.columns))
+            )
+            return
+        tbl = product_metrics_by(filtered_sales, col)
+        if tbl.empty:
+            st.info("No data for this selection.")
+            return
+        c1, c2 = st.columns([3, 2])
+        with c1:
+            st.dataframe(format_product_table(tbl, col), use_container_width=True, hide_index=True)
+        with c2:
+            chart_df = tbl.copy()
+            chart_df["Revenue (₹ Cr)"] = to_cr(chart_df["Revenue"])
+            fig = px.pie(
+                chart_df, names=col, values="Revenue (₹ Cr)", hole=0.55,
+                color_discrete_sequence=[NAVY, GOLD, NAVY_SOFT, GOLD_SOFT, GRAY, "#8B4049", "#D9BB6F", "#B89A85"],
+            )
+            fig.update_traces(textfont_size=11, marker_line_width=1, marker_line_color="white")
+            st.plotly_chart(style_fig(fig, height=320, show_legend=True), use_container_width=True)
+
+    _render_product_section("By Product Category", category_col)
+    st.markdown("---")
+    _render_product_section("By Collection", collection_col)
+    st.markdown("---")
+    _render_product_section("By Price Band", priceband_col)
 
 # ---------------- SAME MONTH VS LAST YEAR ----------------
 with tab_yoy:
