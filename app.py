@@ -977,18 +977,7 @@ with tab_product:
         if tbl.empty:
             st.info("No data for this selection.")
             return
-        c1, c2 = st.columns([3, 2])
-        with c1:
-            st.dataframe(format_product_table(tbl, col), use_container_width=True, hide_index=True)
-        with c2:
-            chart_df = tbl.copy()
-            chart_df["Revenue (₹ Cr)"] = to_cr(chart_df["Revenue"])
-            fig = px.pie(
-                chart_df, names=col, values="Revenue (₹ Cr)", hole=0.55,
-                color_discrete_sequence=[NAVY, GOLD, NAVY_SOFT, GOLD_SOFT, GRAY, "#8B4049", "#D9BB6F", "#B89A85"],
-            )
-            fig.update_traces(textfont_size=11, marker_line_width=1, marker_line_color="white")
-            st.plotly_chart(style_fig(fig, height=320, show_legend=True), use_container_width=True)
+        st.dataframe(format_product_table(tbl, col), use_container_width=True, hide_index=True)
 
     _render_product_section("By Product Category", category_col)
     st.markdown("---")
