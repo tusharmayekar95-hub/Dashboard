@@ -1,4 +1,5 @@
 import re
+import numpy as np
 import pandas as pd
 import streamlit as st
 import plotly.express as px
@@ -523,8 +524,8 @@ def sales_metrics_by(df, group_col, targets_df=None, target_group_col=None):
         Unique_Invoice=(SALES_INVOICE_COL, "nunique"),
         Qty=(SALES_QTY_COL, "sum"),
     ).reset_index()
-    out["ATV"] = out["Revenue"] / out["Unique_Invoice"].replace(0, pd.NA)
-    out["UPT"] = out["Qty"] / out["Unique_Invoice"].replace(0, pd.NA)
+    out["ATV"] = out["Revenue"] / out["Unique_Invoice"].replace(0, np.nan)
+    out["UPT"] = out["Qty"] / out["Unique_Invoice"].replace(0, np.nan)
 
     uc = df.groupby(group_col)["Customer_Key"].nunique().rename("Unique_Customer")
     out = out.merge(uc, on=group_col, how="left")
@@ -538,8 +539,8 @@ def sales_metrics_by(df, group_col, targets_df=None, target_group_col=None):
     out["New_Customer_Count"] = out["New_Customer_Count"].fillna(0)
     out["Repeat_Customer_Count"] = out["Repeat_Customer_Count"].fillna(0)
     tot_nr = out["New_Customer_Count"] + out["Repeat_Customer_Count"]
-    out["New %"] = (out["New_Customer_Count"] / tot_nr.replace(0, pd.NA) * 100).round(1)
-    out["Repeat %"] = (out["Repeat_Customer_Count"] / tot_nr.replace(0, pd.NA) * 100).round(1)
+    out["New %"] = (out["New_Customer_Count"] / tot_nr.replace(0, np.nan) * 100).round(1)
+    out["Repeat %"] = (out["Repeat_Customer_Count"] / tot_nr.replace(0, np.nan) * 100).round(1)
 
     rev_nr = df.dropna(subset=["New/Repeat"]).groupby([group_col, "New/Repeat"])[SALES_NET_COL].sum().unstack(fill_value=0)
     for c in ["New", "Repeat"]:
@@ -575,8 +576,8 @@ def walkin_metrics_by(df, group_col):
     out["New_Walkin"] = out["New_Walkin"].fillna(0)
     out["Repeat_Walkin"] = out["Repeat_Walkin"].fillna(0)
     tot_nr = out["New_Walkin"] + out["Repeat_Walkin"]
-    out["New Walkin %"] = (out["New_Walkin"] / tot_nr.replace(0, pd.NA) * 100).round(1)
-    out["Repeat Walkin %"] = (out["Repeat_Walkin"] / tot_nr.replace(0, pd.NA) * 100).round(1)
+    out["New Walkin %"] = (out["New_Walkin"] / tot_nr.replace(0, np.nan) * 100).round(1)
+    out["Repeat Walkin %"] = (out["Repeat_Walkin"] / tot_nr.replace(0, np.nan) * 100).round(1)
     return out
 
 
