@@ -2,285 +2,182 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import gspread
+
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe
 
-# =====================================================
+
+# ============================================================
 # PAGE CONFIGURATION
-# =====================================================
+# ============================================================
+
 st.set_page_config(
     page_title="Tyaani Jewellery Analytics",
     page_icon="💎",
     layout="wide"
 )
 
-# =====================================================
-# THEME — matched to Tyaani's brand aesthetic (deep maroon / gold / ivory,
-# typical of 22KT gold Polki bridal jewellery branding). Variable names
-# kept as NAVY/NAVY_SOFT for compatibility with the rest of the file —
-# they now hold maroon tones instead of navy.
-# =====================================================
-NAVY = "#5C1A2B"        # deep maroon/wine — primary brand color
-NAVY_SOFT = "#7A2E3F"    # lighter maroon — gradients, secondary elements
-GOLD = "#C9A227"         # gold — unchanged, matches 22KT gold branding
+
+# ============================================================
+# BRAND THEME
+# ============================================================
+
+NAVY = "#5C1A2B"
+NAVY_SOFT = "#7A2E3F"
+GOLD = "#C9A227"
 GOLD_SOFT = "#E3C567"
-GRAY = "#A08972"         # warm taupe (replaces cool gray)
-GRAY_LIGHT = "#EDE3D8"   # warm ivory border tone
-BG = "#FBF7F0"           # warm ivory page background
+
+BG = "#FBF7F0"
 CARD_BG = "#FFFFFF"
-TEXT_MUTED = "#7A6A5D"   # warm gray-brown (replaces cool gray)
+
+TEXT = "#2E1B1F"
+TEXT_MUTED = "#7A6A5D"
+
 GOOD = "#2F7D4F"
 BAD = "#B3413A"
 
-FONT = "'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+FONT = "'Segoe UI', Arial, sans-serif"
 
-# =====================================================
-# GLOBAL STYLING
-# =====================================================
+
+# ============================================================
+# GLOBAL CSS
+# ============================================================
+
 st.markdown(
     f"""
     <style>
-        .stApp {{
-            background-color: {BG};
-        }}
-        h1, h2, h3, h4 {{
-            font-family: {FONT};
-            color: {NAVY};
-        }}
-        /* ---- Header banner ---- */
-        .exec-header {{
-            background: linear-gradient(120deg, {NAVY} 0%, {NAVY_SOFT} 100%);
-            border-radius: 16px;
-            padding: 28px 32px;
-            margin-bottom: 22px;
-            box-shadow: 0 6px 18px rgba(16, 36, 62, 0.18);
-        }}
-        .exec-header h1 {{
-            color: white;
-            margin: 0;
-            font-size: 28px;
-            font-weight: 700;
-            letter-spacing: 0.3px;
-        }}
-        .exec-header p {{
-            color: {GOLD_SOFT};
-            margin: 4px 0 0 0;
-            font-size: 13px;
-            letter-spacing: 0.5px;
-            text-transform: uppercase;
-        }}
-        .filter-pills {{ margin-top: 14px; }}
-        .filter-pill {{
-            display: inline-block;
-            background: rgba(255,255,255,0.10);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.25);
-            border-radius: 999px;
-            padding: 4px 14px;
-            font-size: 12.5px;
-            margin-right: 8px;
-            font-family: {FONT};
-        }}
-        .filter-pill b {{ color: {GOLD_SOFT}; }}
 
-        /* ---- KPI cards ---- */
-        .kpi-card {{
-            background: {CARD_BG};
-            border-radius: 14px;
-            padding: 16px 18px 14px 18px;
-            box-shadow: 0 2px 10px rgba(16, 36, 62, 0.06);
-            border-left: 4px solid {GOLD};
-            transition: transform 0.15s ease, box-shadow 0.15s ease;
-            min-height: 106px;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-        }}
-        .kpi-card:hover {{
-            transform: translateY(-3px);
-            box-shadow: 0 10px 22px rgba(16, 36, 62, 0.14);
-        }}
-        .kpi-icon {{ font-size: 18px; margin-bottom: 2px; }}
-        .kpi-label {{
-            font-family: {FONT};
-            font-size: 11.5px;
-            font-weight: 600;
-            letter-spacing: 0.6px;
-            text-transform: uppercase;
-            color: {TEXT_MUTED};
-            margin-bottom: 2px;
-        }}
-        .kpi-value {{
-            font-family: {FONT};
-            font-size: 23px;
-            font-weight: 700;
-            color: {NAVY};
-            line-height: 1.15;
-        }}
-        .kpi-delta {{
-            font-size: 12px;
-            font-weight: 600;
-            margin-top: 2px;
-        }}
+    .stApp {{
+        background-color: {BG};
+    }}
 
-        /* ---- Section labels ---- */
-        .section-kicker {{
-            font-family: {FONT};
-            font-size: 12px;
-            font-weight: 700;
-            letter-spacing: 1px;
-            text-transform: uppercase;
-            color: {GOLD};
-            margin: 4px 0 2px 0;
-        }}
+    h1, h2, h3, h4 {{
+        color: {NAVY};
+    }}
 
-        /* ---- Tabs ---- */
-        .stTabs [data-baseweb="tab-list"] {{
-            gap: 6px;
-        }}
-        .stTabs [data-baseweb="tab"] {{
-            background-color: transparent;
-            border-radius: 10px 10px 0 0;
-            font-family: {FONT};
-            font-weight: 600;
-            color: {TEXT_MUTED};
-            padding: 8px 16px;
-        }}
-        .stTabs [aria-selected="true"] {{
-            color: {NAVY} !important;
-            border-bottom: 3px solid {GOLD} !important;
-        }}
+    /* HEADER */
 
-        /* ---- Dataframes ---- */
-        div[data-testid="stDataFrame"] {{
-            border-radius: 12px;
-            overflow: hidden;
-        }}
+    .main-header {{
+        background: linear-gradient(
+            120deg,
+            {NAVY},
+            {NAVY_SOFT}
+        );
 
-        /* ---- Sidebar ---- */
-        section[data-testid="stSidebar"] {{
-            background-color: {NAVY};
-        }}
-        section[data-testid="stSidebar"] p,
-        section[data-testid="stSidebar"] span,
-        section[data-testid="stSidebar"] label,
-        section[data-testid="stSidebar"] .stMarkdown,
-        section[data-testid="stSidebar"] h1,
-        section[data-testid="stSidebar"] h2,
-        section[data-testid="stSidebar"] h3 {{
-            color: #F3E9DD !important;
-        }}
-        section[data-testid="stSidebar"] .stSelectbox label {{
-            color: {GOLD_SOFT} !important;
-            font-weight: 600;
-            font-size: 12.5px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }}
-        /* Selectbox itself sits on a white pill — force dark, readable text there */
-        section[data-testid="stSidebar"] div[data-baseweb="select"] > div {{
-            background-color: #FFFFFF !important;
-            border-radius: 10px !important;
-            border: 1px solid {GRAY_LIGHT} !important;
-        }}
-        section[data-testid="stSidebar"] div[data-baseweb="select"] * {{
-            color: {NAVY} !important;
-            fill: {NAVY} !important;
-        }}
-        section[data-testid="stSidebar"] button {{
-            background-color: rgba(255,255,255,0.08) !important;
-            border: 1px solid {GOLD_SOFT} !important;
-            color: {GOLD_SOFT} !important;
-            border-radius: 10px !important;
-            font-weight: 600 !important;
-        }}
-        section[data-testid="stSidebar"] button:hover {{
-            background-color: rgba(201,162,39,0.18) !important;
-            border-color: {GOLD} !important;
-            color: white !important;
-        }}
+        padding: 24px 30px;
+        border-radius: 16px;
+        margin-bottom: 20px;
+        box-shadow: 0 5px 15px rgba(0,0,0,0.10);
+    }}
+
+    .main-header h1 {{
+        color: white;
+        margin: 0;
+        font-size: 28px;
+        font-weight: 700;
+    }}
+
+    .main-header p {{
+        color: {GOLD_SOFT};
+        margin-top: 5px;
+        font-size: 13px;
+    }}
+
+
+    /* SECTION TITLE */
+
+    .section-title {{
+        color: {NAVY};
+        font-size: 17px;
+        font-weight: 700;
+        border-bottom: 2px solid {GOLD};
+        padding-bottom: 6px;
+        margin-top: 20px;
+        margin-bottom: 12px;
+    }}
+
+
+    /* KPI CARD */
+
+    .kpi-card {{
+        background: {CARD_BG};
+        padding: 15px;
+        border-radius: 12px;
+        border-left: 4px solid {GOLD};
+        box-shadow: 0 2px 10px rgba(0,0,0,0.07);
+        min-height: 105px;
+        margin-bottom: 10px;
+    }}
+
+    .kpi-label {{
+        color: {TEXT_MUTED};
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }}
+
+    .kpi-value {{
+        color: {NAVY};
+        font-size: 23px;
+        font-weight: 700;
+        margin-top: 6px;
+    }}
+
+
+    /* SIDEBAR */
+
+    section[data-testid="stSidebar"] {{
+        background-color: {NAVY};
+    }}
+
+    section[data-testid="stSidebar"] label,
+    section[data-testid="stSidebar"] p,
+    section[data-testid="stSidebar"] span {{
+        color: white !important;
+    }}
+
+
+    /* TABS */
+
+    .stTabs [data-baseweb="tab"] {{
+        font-weight: 600;
+    }}
+
     </style>
     """,
     unsafe_allow_html=True
 )
 
 
-def render_kpi(col, icon, label, value, delta=None):
-    """Render a custom KPI card with an optional colored delta.
-    Always reserves the delta row's space so cards in the same row line up
-    whether or not they carry a delta value."""
-    if delta is not None:
-        if delta == "N/A":
-            color = TEXT_MUTED
-        elif delta.strip().startswith("-"):
-            color = BAD
-        else:
-            color = GOOD
-        delta_html = f'<div class="kpi-delta" style="color:{color}">{delta} vs last year</div>'
-    else:
-        delta_html = '<div class="kpi-delta">&nbsp;</div>'
+# ============================================================
+# KPI CARD FUNCTION
+# ============================================================
+
+def render_kpi(col, label, value):
 
     col.markdown(
         f"""
         <div class="kpi-card">
-            <div class="kpi-icon">{icon}</div>
-            <div class="kpi-label">{label}</div>
-            <div class="kpi-value">{value}</div>
-            {delta_html}
+
+            <div class="kpi-label">
+                {label}
+            </div>
+
+            <div class="kpi-value">
+                {value}
+            </div>
+
         </div>
         """,
-        unsafe_allow_html=True,
+        unsafe_allow_html=True
     )
 
 
-def style_fig(fig, height=400, show_legend=None, category_count=0):
-    """Apply a consistent, minimal executive look to every chart.
-    category_count lets bar/pie charts with many x-axis labels (e.g. 20+
-    associates) auto-angle their tick labels so they don't overlap."""
-    fig.update_layout(
-        template="plotly_white",
-        font=dict(family=FONT, size=12.5, color=TEXT_MUTED),
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=10, r=10, t=30, b=10),
-        height=height,
-        hoverlabel=dict(bgcolor="white", font_size=12.5, font_family=FONT),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-    )
-    if show_legend is not None:
-        fig.update_layout(showlegend=show_legend)
-    tickangle = -45 if category_count > 8 else 0
-    fig.update_xaxes(
-        showgrid=False, showline=True, linecolor=GRAY_LIGHT,
-        tickfont=dict(size=11.5), tickangle=tickangle,
-    )
-    fig.update_yaxes(showgrid=True, gridcolor="#EFEDE8", zeroline=False, tickfont=dict(size=11.5))
-    if category_count > 8:
-        fig.update_layout(margin=dict(l=10, r=10, t=30, b=90))
-    return fig
+# ============================================================
+# GOOGLE SHEETS CONFIGURATION
+# ============================================================
 
-
-def highlight_top(fig, values, top_color=GOLD, base_color=NAVY_SOFT):
-    """Recolor a single-series bar chart: navy bars, gold highlight on the top value."""
-    if len(values) == 0:
-        return fig
-    peak = max(values)
-    colors = [top_color if v == peak else base_color for v in values]
-    fig.update_traces(marker_color=colors, marker_line_width=0)
-    return fig
-
-
-CR = 10_000_000  # 1 Crore = 1,00,00,000
-
-
-def to_cr(series):
-    """Convert a raw rupee series/value to Crores for chart display."""
-    return series / CR
-
-
-# =====================================================
-# LOAD DATA — Google Sheets via service account (gspread)
-# =====================================================
 SALES_SHEET_ID = "18pTb4qEZe4HtioClGzUGtZwvfY7wVs-4yT-PSgZinps"
 SALES_GID = "2003103498"
 
@@ -291,894 +188,3231 @@ TARGETS_SHEET_ID = "1VIvFZkAezRoQzqny-EE8-QMbzLCBsWlOtPnIaFbpQAA"
 TARGETS_GID = "0"
 
 
-def _get_worksheet(spreadsheet, gid):
-    """Open the exact tab matching the gid from the sheet's URL, not just the
-    first tab — .sheet1 silently reads the wrong data if Sales/Walk-ins
-    aren't on the first tab of their spreadsheet."""
+# ============================================================
+# HELPER FUNCTION
+# ============================================================
+
+def get_worksheet_by_gid(spreadsheet, gid):
+
     try:
-        return spreadsheet.get_worksheet_by_id(int(gid))
+
+        return spreadsheet.get_worksheet_by_id(
+            int(gid)
+        )
+
     except Exception:
+
         for ws in spreadsheet.worksheets():
+
             if str(ws.id) == str(gid):
+
                 return ws
-    # Fall back to the first tab only if the gid truly can't be found
-    return spreadsheet.sheet1
+
+        return spreadsheet.sheet1
 
 
-def _melt_targets(df):
-    """Reshape the Targets sheet from its actual wide layout —
-    one row per Store, one column per Month (e.g. 'Apr-25'), plus a
-    trailing 'Total' column and a 'TOTAL' row — into a clean long
-    format: Store | Month_Label | Month_Sort | Target."""
+# ============================================================
+# MOBILE NUMBER NORMALIZATION
+# ============================================================
+
+def normalize_mobile(value):
+
+    """
+    Standardizes Indian mobile numbers.
+
+    Examples:
+
+    9876543210
+    +91 9876543210
+    +919876543210
+    09876543210
+    98765 43210
+    987-654-3210
+
+    All become:
+
+    9876543210
+    """
+
+    if pd.isna(value):
+
+        return pd.NA
+
+
+    value = str(value).strip()
+
+
+    # Remove Excel decimal format
+
+    if value.endswith(".0"):
+
+        value = value[:-2]
+
+
+    # Keep only digits
+
+    digits = "".join(
+
+        character
+
+        for character in value
+
+        if character.isdigit()
+
+    )
+
+
+    # Empty value
+
+    if digits == "":
+
+        return pd.NA
+
+
+    # ========================================================
+    # COUNTRY CODE 91
+    # ========================================================
+
+    # Example:
+    #
+    # 919876543210
+    # +919876543210
+    #
+
+    if len(digits) == 12 and digits.startswith("91"):
+
+        digits = digits[2:]
+
+
+    # ========================================================
+    # LEADING ZERO
+    # ========================================================
+
+    # Example:
+    #
+    # 09876543210
+    #
+
+    if len(digits) == 11 and digits.startswith("0"):
+
+        digits = digits[1:]
+
+
+    # ========================================================
+    # VALID INDIAN MOBILE NUMBER
+    # ========================================================
+
+    if (
+
+        len(digits) == 10
+
+        and
+
+        digits[0] in "6789"
+
+    ):
+
+        return digits
+
+
+    # Invalid mobile number
+
+    return pd.NA
+
+
+# ============================================================
+# CREATE CUSTOMER KEY
+# ============================================================
+
+def create_customer_key(df):
+
     df = df.copy()
-    store_col = df.columns[0]  # e.g. "Store Targets"
-    df = df.rename(columns={store_col: "Store"})
-    df["Store"] = df["Store"].astype(str).str.strip()
 
-    # Drop the aggregate "TOTAL" row
-    df = df[~df["Store"].str.upper().isin(["TOTAL", "GRAND TOTAL", ""])]
 
-    # Every column except Store and any "Total" column is a month column
-    month_cols = [
-        c for c in df.columns
-        if c != "Store" and str(c).strip().lower() != "total"
+    # ========================================================
+    # NORMALIZE MOBILE
+    # ========================================================
+
+    df["Mobile_Normalized"] = (
+
+        df["Mobile Number"]
+
+        .apply(normalize_mobile)
+
+    )
+
+
+    # ========================================================
+    # NORMALIZE NAME
+    # ========================================================
+
+    df["Name_Normalized"] = (
+
+        df["Customer Name"]
+
+        .astype("string")
+
+        .str.upper()
+
+        .str.strip()
+
+        .str.replace(
+            r"\s+",
+            " ",
+            regex=True
+        )
+
+    )
+
+
+    # Remove invalid names
+
+    df["Name_Normalized"] = (
+
+        df["Name_Normalized"]
+
+        .replace(
+
+            [
+
+                "",
+
+                "NAN",
+
+                "NONE",
+
+                "NULL",
+
+                "NA",
+
+                "N/A"
+
+            ],
+
+            pd.NA
+
+        )
+
+    )
+
+
+    # ========================================================
+    # CUSTOMER KEY
+    # ========================================================
+
+    # MOBILE HAS PRIORITY
+    #
+    # If mobile exists:
+    #
+    # MOBILE_9876543210
+    #
+    # If mobile does not exist:
+    #
+    # NAME_RAHUL SHARMA
+    #
+
+    df["Customer_Key"] = pd.NA
+
+
+    # Mobile available
+
+    mobile_mask = (
+
+        df["Mobile_Normalized"]
+
+        .notna()
+
+    )
+
+
+    df.loc[mobile_mask, "Customer_Key"] = (
+
+        "MOBILE_"
+
+        +
+
+        df.loc[
+            mobile_mask,
+            "Mobile_Normalized"
+        ]
+
+    )
+
+
+    # Name fallback
+
+    name_mask = (
+
+        df["Customer_Key"].isna()
+
+        &
+
+        df["Name_Normalized"].notna()
+
+    )
+
+
+    df.loc[name_mask, "Customer_Key"] = (
+
+        "NAME_"
+
+        +
+
+        df.loc[
+            name_mask,
+            "Name_Normalized"
+        ]
+
+    )
+
+
+    # Completely unknown customer
+
+    df["Customer_Key"] = (
+
+        df["Customer_Key"]
+
+        .fillna("UNKNOWN_CUSTOMER")
+
+    )
+
+
+    return df
+
+
+# ============================================================
+# NEW / REPEAT CUSTOMER LOGIC
+# ============================================================
+
+def calculate_new_repeat(df):
+
+    df = df.copy()
+
+
+    # ========================================================
+    # FIRST PURCHASE MONTH
+    #
+    # Store + Customer
+    #
+    # The customer can be New in one store
+    # and Repeat in another store.
+    # ========================================================
+
+    first_purchase = (
+
+        df
+
+        .groupby(
+
+            [
+
+                "Store",
+
+                "Customer_Key"
+
+            ]
+
+        )[
+
+            "Month_Sort"
+
+        ]
+
+        .min()
+
+        .reset_index()
+
+        .rename(
+
+            columns={
+
+                "Month_Sort":
+
+                "First_Purchase_Month"
+
+            }
+
+        )
+
+    )
+
+
+    # ========================================================
+    # MERGE FIRST PURCHASE MONTH
+    # ========================================================
+
+    df = df.merge(
+
+        first_purchase,
+
+        on=[
+
+            "Store",
+
+            "Customer_Key"
+
+        ],
+
+        how="left"
+
+    )
+
+
+    # ========================================================
+    # NEW / REPEAT
+    # ========================================================
+
+    # Same month as first purchase = New
+    #
+    # Later month = Repeat
+    #
+
+    df["New_Repeat"] = "New"
+
+
+    repeat_mask = (
+
+        df["Month_Sort"]
+
+        >
+
+        df["First_Purchase_Month"]
+
+    )
+
+
+    df.loc[
+
+        repeat_mask,
+
+        "New_Repeat"
+
+    ] = "Repeat"
+
+
+    return df
+
+
+# ============================================================
+# PREPARE TARGET DATA
+# ============================================================
+
+def prepare_targets(targets):
+
+    targets = targets.copy()
+
+
+    # First column is Store
+
+    targets = targets.rename(
+
+        columns={
+
+            targets.columns[0]:
+
+            "Store"
+
+        }
+
+    )
+
+
+    targets["Store"] = (
+
+        targets["Store"]
+
+        .astype(str)
+
+        .str.strip()
+
+    )
+
+
+    # Remove total rows
+
+    targets = targets[
+
+        ~
+
+        targets["Store"]
+
+        .str.upper()
+
+        .isin(
+
+            [
+
+                "TOTAL",
+
+                "GRAND TOTAL",
+
+                ""
+
+            ]
+
+        )
+
     ]
 
-    melted = df.melt(id_vars=["Store"], value_vars=month_cols, var_name="Month_Label", value_name="Target")
-    melted["Month_Label"] = melted["Month_Label"].astype(str).str.strip()
-    melted["Target"] = pd.to_numeric(melted["Target"], errors="coerce").fillna(0)
-    melted["_ParsedMonth"] = pd.to_datetime(melted["Month_Label"], format="%b-%y", errors="coerce")
-    melted = melted.dropna(subset=["_ParsedMonth"])
-    melted["Month_Sort"] = melted["_ParsedMonth"].dt.strftime("%Y-%m")
-    return melted[["Store", "Month_Label", "Month_Sort", "Target"]]
+
+    # Month columns
+
+    month_columns = [
+
+        column
+
+        for column in targets.columns
+
+        if (
+
+            column != "Store"
+
+            and
+
+            str(column)
+
+            .strip()
+
+            .lower()
+
+            != "total"
+
+        )
+
+    ]
 
 
-@st.cache_data(ttl=300)  # re-fetch from Google Sheets at most every 5 minutes
-def _clean_team_targets(df):
-    """Clean the 'Team Target' tab: Store Name | Agent Name | Target | Month-YY
-    (already long-format, one row per Agent+Month — no reshaping needed,
-    just standardize column names and parse the month)."""
-    df = df.copy()
-    rename_map = {}
-    for c in df.columns:
-        cl = str(c).strip().lower()
-        if cl in ("store name", "store"):
-            rename_map[c] = "Store"
-        elif cl in ("agent name", "agent"):
-            rename_map[c] = "Agent"
-        elif cl == "target":
-            rename_map[c] = "Target"
-        elif cl in ("month-yy", "month", "month_label", "month-year"):
-            rename_map[c] = "Month_Label"
-    df = df.rename(columns=rename_map)
+    # Wide to long
 
-    required = {"Store", "Agent", "Target", "Month_Label"}
-    if not required.issubset(df.columns):
-        return None  # signals the caller that the tab's structure didn't match
+    targets = targets.melt(
 
-    df["Store"] = df["Store"].astype(str).str.strip()
-    df["Agent"] = df["Agent"].astype(str).str.strip()
-    df["Month_Label"] = df["Month_Label"].astype(str).str.strip()
-    df["Target"] = pd.to_numeric(df["Target"], errors="coerce").fillna(0)
-    df = df[(df["Agent"] != "") & (df["Agent"].str.lower() != "nan")]
-    df["_ParsedMonth"] = pd.to_datetime(df["Month_Label"], format="%b-%y", errors="coerce")
-    df = df.dropna(subset=["_ParsedMonth"])
-    df["Month_Sort"] = df["_ParsedMonth"].dt.strftime("%Y-%m")
-    return df[["Store", "Agent", "Month_Label", "Month_Sort", "Target"]]
+        id_vars=[
 
+            "Store"
 
-def load_data():
-    creds = Credentials.from_service_account_info(
-        st.secrets["gcp_service_account"],
-        scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
+        ],
+
+        value_vars=month_columns,
+
+        var_name="Month_Label",
+
+        value_name="Target"
+
     )
-    client = gspread.authorize(creds)
 
-    sales_ss = client.open_by_key(SALES_SHEET_ID)
-    walkins_ss = client.open_by_key(WALKINS_SHEET_ID)
-    targets_ss = client.open_by_key(TARGETS_SHEET_ID)
 
-    sales_ws = _get_worksheet(sales_ss, SALES_GID)
-    walkins_ws = _get_worksheet(walkins_ss, WALKINS_GID)
-    targets_ws = _get_worksheet(targets_ss, TARGETS_GID)
+    targets["Month_Label"] = (
 
-    sales = get_as_dataframe(sales_ws, evaluate_formulas=True)
-    walkins = get_as_dataframe(walkins_ws, evaluate_formulas=True)
-    targets_raw = get_as_dataframe(targets_ws, evaluate_formulas=True)
+        targets["Month_Label"]
 
-    # get_as_dataframe pulls in the sheet's full grid, including trailing
-    # empty rows/columns beyond your actual data — drop both.
-    sales = sales.dropna(how="all").dropna(axis=1, how="all")
-    walkins = walkins.dropna(how="all").dropna(axis=1, how="all")
-    targets_raw = targets_raw.dropna(how="all").dropna(axis=1, how="all")
+        .astype(str)
 
-    sales["Date"] = pd.to_datetime(sales["Date"], errors="coerce")
-    sales["Year"] = sales["Date"].dt.year
-    sales["Month"] = sales["Date"].dt.month
-    sales["Month_Label"] = sales["Date"].dt.strftime("%b-%y")
-    sales["Month_Sort"] = sales["Date"].dt.strftime("%Y-%m")
+        .str.strip()
 
-    walkins["Date"] = pd.to_datetime(walkins["Date"], errors="coerce")
-    walkins["Year"] = walkins["Date"].dt.year
-    walkins["Month"] = walkins["Date"].dt.month
-    walkins["Month_Label"] = walkins["Date"].dt.strftime("%b-%y")
-    walkins["Month_Sort"] = walkins["Date"].dt.strftime("%Y-%m")
+    )
 
-    targets = _melt_targets(targets_raw)
 
-    # Team Target lives on a separate tab within the same spreadsheet —
-    # fetch by tab NAME rather than gid, since gspread supports that
-    # directly and we don't have to guess a gid number.
-    team_targets = pd.DataFrame(columns=["Store", "Agent", "Month_Label", "Month_Sort", "Target"])
-    try:
-        team_target_ws = targets_ss.worksheet("Team Target")
-        team_targets_raw = get_as_dataframe(team_target_ws, evaluate_formulas=True)
-        team_targets_raw = team_targets_raw.dropna(how="all").dropna(axis=1, how="all")
-        cleaned = _clean_team_targets(team_targets_raw)
-        if cleaned is not None:
-            team_targets = cleaned
-    except gspread.exceptions.WorksheetNotFound:
-        pass  # Team Target tab doesn't exist / was renamed — handled gracefully in the UI
+    targets["Target"] = pd.to_numeric(
 
-    return sales, walkins, targets, team_targets
+        targets["Target"],
 
+        errors="coerce"
+
+    ).fillna(0)
+
+
+    # Validate month
+
+    targets["_ParsedMonth"] = pd.to_datetime(
+
+        targets["Month_Label"],
+
+        format="%b-%y",
+
+        errors="coerce"
+
+    )
+
+
+    targets = targets.dropna(
+
+        subset=[
+
+            "_ParsedMonth"
+
+        ]
+
+    )
+
+
+    return targets[
+
+        [
+
+            "Store",
+
+            "Month_Label",
+
+            "Target"
+
+        ]
+
+    ]
+
+
+# ============================================================
+# LOAD DATA
+# ============================================================
+
+@st.cache_data(ttl=300)
+def load_data():
+
+
+    # ========================================================
+    # GOOGLE CREDENTIALS
+    # ========================================================
+
+    credentials = Credentials.from_service_account_info(
+
+        st.secrets["gcp_service_account"],
+
+        scopes=[
+
+            "https://www.googleapis.com/auth/spreadsheets.readonly"
+
+        ]
+
+    )
+
+
+    client = gspread.authorize(
+
+        credentials
+
+    )
+
+
+    # ========================================================
+    # OPEN SPREADSHEETS
+    # ========================================================
+
+    sales_ss = client.open_by_key(
+
+        SALES_SHEET_ID
+
+    )
+
+
+    walkins_ss = client.open_by_key(
+
+        WALKINS_SHEET_ID
+
+    )
+
+
+    targets_ss = client.open_by_key(
+
+        TARGETS_SHEET_ID
+
+    )
+
+
+    # ========================================================
+    # OPEN WORKSHEETS
+    # ========================================================
+
+    sales_ws = get_worksheet_by_gid(
+
+        sales_ss,
+
+        SALES_GID
+
+    )
+
+
+    walkins_ws = get_worksheet_by_gid(
+
+        walkins_ss,
+
+        WALKINS_GID
+
+    )
+
+
+    targets_ws = get_worksheet_by_gid(
+
+        targets_ss,
+
+        TARGETS_GID
+
+    )
+
+
+    # ========================================================
+    # READ DATA
+    # ========================================================
+
+    sales = get_as_dataframe(
+
+        sales_ws,
+
+        evaluate_formulas=True
+
+    )
+
+
+    walkins = get_as_dataframe(
+
+        walkins_ws,
+
+        evaluate_formulas=True
+
+    )
+
+
+    targets = get_as_dataframe(
+
+        targets_ws,
+
+        evaluate_formulas=True
+
+    )
+
+
+    # ========================================================
+    # REMOVE EMPTY ROWS / COLUMNS
+    # ========================================================
+
+    sales = (
+
+        sales
+
+        .dropna(how="all")
+
+        .dropna(axis=1, how="all")
+
+    )
+
+
+    walkins = (
+
+        walkins
+
+        .dropna(how="all")
+
+        .dropna(axis=1, how="all")
+
+    )
+
+
+    targets = (
+
+        targets
+
+        .dropna(how="all")
+
+        .dropna(axis=1, how="all")
+
+    )
+
+
+    # ========================================================
+    # SALES DATE FIELDS
+    # ========================================================
+
+    sales["Date"] = pd.to_datetime(
+
+        sales["Date"],
+
+        errors="coerce"
+
+    )
+
+
+    sales["Month_Sort"] = (
+
+        sales["Date"]
+
+        .dt.to_period("M")
+
+        .astype(str)
+
+    )
+
+
+    sales["Month_Label"] = (
+
+        sales["Date"]
+
+        .dt.strftime("%b-%y")
+
+    )
+
+
+    sales["Year"] = (
+
+        sales["Date"]
+
+        .dt.year
+
+    )
+
+
+    sales["Month"] = (
+
+        sales["Date"]
+
+        .dt.month
+
+    )
+
+
+    # ========================================================
+    # WALK-IN DATE FIELDS
+    # ========================================================
+
+    walkins["Date"] = pd.to_datetime(
+
+        walkins["Date"],
+
+        errors="coerce"
+
+    )
+
+
+    walkins["Month_Sort"] = (
+
+        walkins["Date"]
+
+        .dt.to_period("M")
+
+        .astype(str)
+
+    )
+
+
+    walkins["Month_Label"] = (
+
+        walkins["Date"]
+
+        .dt.strftime("%b-%y")
+
+    )
+
+
+    walkins["Year"] = (
+
+        walkins["Date"]
+
+        .dt.year
+
+    )
+
+
+    walkins["Month"] = (
+
+        walkins["Date"]
+
+        .dt.month
+
+    )
+
+
+    # ========================================================
+    # NUMERIC COLUMNS
+    # ========================================================
+
+    sales["Net Amount"] = pd.to_numeric(
+
+        sales["Net Amount"],
+
+        errors="coerce"
+
+    ).fillna(0)
+
+
+    sales["Qty"] = pd.to_numeric(
+
+        sales["Qty"],
+
+        errors="coerce"
+
+    ).fillna(0)
+
+
+    # ========================================================
+    # CREATE CUSTOMER KEY
+    # ========================================================
+
+    sales = create_customer_key(
+
+        sales
+
+    )
+
+
+    walkins = create_customer_key(
+
+        walkins
+
+    )
+
+
+    # ========================================================
+    # CALCULATE NEW / REPEAT
+    # ========================================================
+
+    sales = calculate_new_repeat(
+
+        sales
+
+    )
+
+
+    walkins = calculate_new_repeat(
+
+        walkins
+
+    )
+
+
+    # ========================================================
+    # SALES-WALKIN MATCHING
+    # ========================================================
+
+    # Sales transaction key:
+    #
+    # Store
+    # Date
+    # Customer Key
+    #
+
+    sales_match_keys = (
+
+        sales
+
+        [
+
+            [
+
+                "Store",
+
+                "Date",
+
+                "Customer_Key"
+
+            ]
+
+        ]
+
+        .drop_duplicates()
+
+    )
+
+
+    sales_match_keys[
+
+        "Sales_Walkin_Tag"
+
+    ] = "Converted"
+
+
+    # Match Walk-in to Sales
+
+    walkins = walkins.merge(
+
+        sales_match_keys,
+
+        on=[
+
+            "Store",
+
+            "Date",
+
+            "Customer_Key"
+
+        ],
+
+        how="left"
+
+    )
+
+
+    walkins["Sales_Walkin_Tag"] = (
+
+        walkins["Sales_Walkin_Tag"]
+
+        .fillna("Not Converted")
+
+    )
+
+
+    # ========================================================
+    # TARGETS
+    # ========================================================
+
+    targets = prepare_targets(
+
+        targets
+
+    )
+
+
+    return (
+
+        sales,
+
+        walkins,
+
+        targets
+
+    )
+
+
+# ============================================================
+# LOAD DATA
+# ============================================================
 
 try:
-    sales, walkins, targets, team_targets = load_data()
-except Exception as e:
+
+    sales, walkins, targets = load_data()
+
+except Exception as error:
+
     st.error(
-        f"Could not load data from Google Sheets: {e}\n\n"
-        "Check that:\n"
-        "1. `.streamlit/secrets.toml` has a `[gcp_service_account]` section "
-        "with your service account's JSON key.\n"
-        "2. All three sheets (Sales, Walk-ins, Targets) are shared with the "
-        "service account's email (the `client_email` field in your key file).\n"
-        "3. The sheet IDs / gid values at the top of `load_data()` are correct."
+
+        f"""
+        Data loading failed.
+
+        Error:
+        {error}
+
+        Please check:
+
+        1. Google Sheet IDs
+        2. GID values
+        3. Service account credentials
+        4. Required column names
+        """
+
     )
+
     st.stop()
 
-CANDIDATE_ASSOC_KEYWORDS = [
-    "associate", "executive", "salesperson", "sales person",
-    "staff", "employee", "sold by", "sales rep", "advisor",
-]
 
-# =====================================================
-# SIDEBAR — FILTERS (Store + Month only)
-# =====================================================
-st.sidebar.markdown("## 💎 Tyaani Analytics")
-st.sidebar.caption("Filter the dashboard")
+# ============================================================
+# SIDEBAR
+# ============================================================
 
-stores = sorted(sales["Store"].dropna().unique().tolist())
+st.sidebar.markdown(
+
+    "## 💎 Tyaani Analytics"
+
+)
+
+
+st.sidebar.markdown(
+
+    "### Filters"
+
+)
+
+
+# ============================================================
+# STORE FILTER
+# ============================================================
+
+stores = sorted(
+
+    sales["Store"]
+
+    .dropna()
+
+    .unique()
+
+    .tolist()
+
+)
+
+
+selected_stores = st.sidebar.multiselect(
+
+    "Store",
+
+    stores,
+
+    default=[],
+
+    help="Leave blank for all stores"
+
+)
+
+
+# ============================================================
+# MONTH FILTER
+# ============================================================
 
 month_lookup = (
-    sales[["Month_Label", "Month_Sort"]]
-    .dropna()
+
+    sales
+
+    [
+
+        [
+
+            "Month_Label",
+
+            "Month_Sort"
+
+        ]
+
+    ]
+
     .drop_duplicates()
-    .sort_values("Month_Sort")
+
+    .sort_values(
+
+        "Month_Sort"
+
+    )
+
 )
-months = ["All"] + month_lookup["Month_Label"].tolist()
 
-selected_stores = st.sidebar.multiselect("Store", stores, default=[], placeholder="All stores")
-selected_month = st.sidebar.selectbox("Month", months)
 
-# Display helper: empty selection means "All stores"
-store_display = ", ".join(selected_stores) if selected_stores else "All"
+months = (
 
-st.sidebar.markdown("---")
-st.sidebar.caption(f"Sales rows loaded: {len(sales):,}")
-st.sidebar.caption(f"Walk-in rows loaded: {len(walkins):,}")
-st.sidebar.caption(f"Target rows loaded: {len(targets):,}")
-st.sidebar.caption(f"Team Target rows loaded: {len(team_targets):,}")
-st.sidebar.caption("Data auto-refreshes every 5 min.")
-if st.sidebar.button("🔄 Refresh data now"):
+    month_lookup
+
+    ["Month_Label"]
+
+    .tolist()
+
+)
+
+
+selected_months = st.sidebar.multiselect(
+
+    "Month-YY",
+
+    months,
+
+    default=[],
+
+    help="Leave blank for all months"
+
+)
+
+
+# ============================================================
+# DATE LEVEL FILTER
+# ============================================================
+
+available_dates = sorted(
+
+    sales["Date"]
+
+    .dropna()
+
+    .dt.date
+
+    .unique()
+
+    .tolist()
+
+)
+
+
+selected_dates = st.sidebar.multiselect(
+
+    "Date Level",
+
+    available_dates,
+
+    default=[],
+
+    help="Leave blank for all dates"
+
+)
+
+
+# ============================================================
+# REFRESH BUTTON
+# ============================================================
+
+if st.sidebar.button(
+
+    "🔄 Refresh Data"
+
+):
+
     st.cache_data.clear()
+
     st.rerun()
 
 
+# ============================================================
+# APPLY FILTERS
+# ============================================================
+
 def apply_filters(df):
-    out = df.copy()
+
+    result = df.copy()
+
+
     if selected_stores:
-        out = out[out["Store"].isin(selected_stores)]
-    if selected_month != "All":
-        out = out[out["Month_Label"] == selected_month]
-    return out
+
+        result = result[
+
+            result["Store"]
+
+            .isin(
+
+                selected_stores
+
+            )
+
+        ]
 
 
-filtered_sales = apply_filters(sales)
-filtered_walkins = apply_filters(walkins)
+    if selected_months:
 
-# =====================================================
+        result = result[
+
+            result["Month_Label"]
+
+            .isin(
+
+                selected_months
+
+            )
+
+        ]
+
+
+    if selected_dates:
+
+        result = result[
+
+            result["Date"]
+
+            .dt.date
+
+            .isin(
+
+                selected_dates
+
+            )
+
+        ]
+
+
+    return result
+
+
+filtered_sales = apply_filters(
+
+    sales
+
+)
+
+
+filtered_walkins = apply_filters(
+
+    walkins
+
+)
+
+
+# ============================================================
 # HEADER
-# =====================================================
+# ============================================================
+
+store_text = (
+
+    ", ".join(selected_stores)
+
+    if selected_stores
+
+    else
+
+    "All Stores"
+
+)
+
+
+month_text = (
+
+    ", ".join(selected_months)
+
+    if selected_months
+
+    else
+
+    "All Months"
+
+)
+
+
 st.markdown(
+
     f"""
-    <div class="exec-header">
-        <h1>💎 Tyaani Jewellery — Executive Dashboard</h1>
-        <p>Performance overview across stores, months & sales associates</p>
-        <div class="filter-pills">
-            <span class="filter-pill">Store: <b>{store_display}</b></span>
-            <span class="filter-pill">Month: <b>{selected_month}</b></span>
-        </div>
+
+    <div class="main-header">
+
+        <h1>
+            💎 Tyaani Jewellery Analytics
+        </h1>
+
+        <p>
+            Sales • Walk-in • Customer • Conversion Performance
+        </p>
+
+        <p>
+            Store: {store_text}
+            &nbsp; | &nbsp;
+            Month: {month_text}
+        </p>
+
     </div>
+
     """,
+
     unsafe_allow_html=True
+
 )
 
-# =====================================================
-# KPI CALCULATIONS
-# =====================================================
-net_sales = filtered_sales["Net Amount"].sum()
-total_invoices = filtered_sales["Invoice No"].nunique()
 
-new_customers = filtered_sales[filtered_sales["New/Repeat"] == "New"]["Helper"].nunique()
-repeat_customers = filtered_sales[filtered_sales["New/Repeat"] == "Repeat"]["Helper"].nunique()
+# ============================================================
+# TARGET CALCULATION
+# ============================================================
 
-repeat_share = (
-    repeat_customers / (new_customers + repeat_customers) * 100
-    if (new_customers + repeat_customers) > 0 else 0
-)
-
-avg_bill = net_sales / total_invoices if total_invoices > 0 else 0
-
-total_walkins = filtered_walkins[
-    (filtered_walkins["New/Repeat"] == "New") &
-    (filtered_walkins["unique cust count WRT num&Nam"] == 1)
-]["Helper"].nunique()
-
-matched_walkins = filtered_walkins[
-    (filtered_walkins["Sales Matched"] == "Matched") &
-    (filtered_walkins["unique cust count WRT num&Nam"] == 1)
-]["Helper"].nunique()
-
-conversion = matched_walkins / total_walkins * 100 if total_walkins > 0 else 0
-upt = filtered_sales["Qty"].sum() / total_invoices if total_invoices > 0 else 0
-
-# ---------------- YEAR ON YEAR (same month) ----------------
-current_sales = net_sales
-last_year_sales = 0
-
-if selected_month != "All":
-    current = pd.to_datetime(selected_month, format="%b-%y")
-    current_month = current.month
-    current_year = current.year
-    previous_year = current_year - 1
-
-    prior_year_df = sales[(sales["Month"] == current_month) & (sales["Year"] == previous_year)]
-    if selected_stores:
-        prior_year_df = prior_year_df[prior_year_df["Store"].isin(selected_stores)]
-
-    last_year_sales = prior_year_df["Net Amount"].sum()
-
-if last_year_sales > 0:
-    yoy_growth = ((current_sales - last_year_sales) / last_year_sales) * 100
-    yoy_display = f"{yoy_growth:+.1f}%"
-else:
-    yoy_display = "N/A"
-
-# ---------------- TARGET & ACHIEVEMENT (same Store + Month scope as net_sales) ----------------
 target_scope = targets.copy()
+
+
 if selected_stores:
-    target_scope = target_scope[target_scope["Store"].isin(selected_stores)]
-if selected_month != "All":
-    target_scope = target_scope[target_scope["Month_Label"] == selected_month]
 
-period_target = target_scope["Target"].sum()
+    target_scope = target_scope[
 
-if period_target > 0:
-    achievement_pct = net_sales / period_target * 100
-    surplus = net_sales - period_target
-    achievement_display = f"{achievement_pct:.1f}%"
-    surplus_display = f"{'+' if surplus >= 0 else '-'}₹{abs(surplus):,.0f}"
-    target_display = f"₹{period_target:,.0f}"
-else:
-    achievement_display = "N/A"
-    surplus_display = "N/A"
-    target_display = "N/A"
+        target_scope["Store"]
 
-# =====================================================
-# KPI CARDS
-# =====================================================
-st.markdown('<div class="section-kicker">Key Metrics</div>', unsafe_allow_html=True)
+        .isin(
 
-r1 = st.columns(3)
-render_kpi(r1[0], "💎", "Net Sales", f"₹{net_sales:,.0f}", yoy_display)
-render_kpi(r1[1], "🧾", "Invoices", f"{total_invoices:,}")
-render_kpi(r1[2], "💳", "Avg Bill", f"₹{avg_bill:,.0f}")
+            selected_stores
 
-st.write("")
+        )
 
-r2 = st.columns(3)
-render_kpi(r2[0], "📦", "UPT", f"{upt:.2f}")
-render_kpi(r2[1], "🔁", "Repeat %", f"{repeat_share:.1f}%")
-render_kpi(r2[2], "🎯", "Conversion %", f"{conversion:.1f}%")
-
-st.write("")
-
-r3 = st.columns(3)
-render_kpi(r3[0], "🚶", "Walk-ins", f"{total_walkins:,}")
-render_kpi(r3[1], "🆕", "New Customers", f"{new_customers:,}")
-render_kpi(r3[2], "👥", "Repeat Customers", f"{repeat_customers:,}")
-
-st.write("")
-
-r4 = st.columns(3)
-render_kpi(r4[0], "🎯", "Target", target_display)
-render_kpi(r4[1], "🏆", "Achievement %", achievement_display)
-render_kpi(r4[2], "⚖️", "Surplus / Shortfall", surplus_display)
-
-st.write("")
-st.markdown("---")
-
-# =====================================================
-# TABS
-# =====================================================
-tab_trend, tab_store, tab_month_yoy, tab_assoc, tab_walkin, tab_data = st.tabs(
-    [
-        "📈 Trends",
-        "🏬 Store & City Breakdown",
-        "📆 Month vs Last Year",
-        "🧑‍💼 Sales Associate",
-        "🚶 Walk-in Summary",
-        "📄 Raw Data",
     ]
+
+
+if selected_months:
+
+    target_scope = target_scope[
+
+        target_scope["Month_Label"]
+
+        .isin(
+
+            selected_months
+
+        )
+
+    ]
+
+
+period_target = target_scope[
+
+    "Target"
+
+].sum()
+
+
+# ============================================================
+# SALES KPI CALCULATIONS
+# ============================================================
+
+revenue = filtered_sales[
+
+    "Net Amount"
+
+].sum()
+
+
+unique_invoice = filtered_sales[
+
+    "Invoice No"
+
+].nunique()
+
+
+total_qty = filtered_sales[
+
+    "Qty"
+
+].sum()
+
+
+atv = (
+
+    revenue
+
+    /
+
+    unique_invoice
+
+    if unique_invoice > 0
+
+    else 0
+
 )
 
-# ---------------- TAB 1: TRENDS ----------------
-with tab_trend:
-    trend_source = sales.copy()
+
+upt = (
+
+    total_qty
+
+    /
+
+    unique_invoice
+
+    if unique_invoice > 0
+
+    else 0
+
+)
+
+
+unique_customer = filtered_sales[
+
+    "Customer_Key"
+
+].nunique()
+
+
+new_customer = filtered_sales[
+
+    filtered_sales["New_Repeat"]
+
+    ==
+
+    "New"
+
+][
+
+    "Customer_Key"
+
+].nunique()
+
+
+repeat_customer = filtered_sales[
+
+    filtered_sales["New_Repeat"]
+
+    ==
+
+    "Repeat"
+
+][
+
+    "Customer_Key"
+
+].nunique()
+
+
+customer_total = (
+
+    new_customer
+
+    +
+
+    repeat_customer
+
+)
+
+
+new_percentage = (
+
+    new_customer
+
+    /
+
+    customer_total
+
+    *
+
+    100
+
+    if customer_total > 0
+
+    else 0
+
+)
+
+
+repeat_percentage = (
+
+    repeat_customer
+
+    /
+
+    customer_total
+
+    *
+
+    100
+
+    if customer_total > 0
+
+    else 0
+
+)
+
+
+revenue_new_customer = filtered_sales[
+
+    filtered_sales["New_Repeat"]
+
+    ==
+
+    "New"
+
+][
+
+    "Net Amount"
+
+].sum()
+
+
+revenue_repeat_customer = filtered_sales[
+
+    filtered_sales["New_Repeat"]
+
+    ==
+
+    "Repeat"
+
+][
+
+    "Net Amount"
+
+].sum()
+
+
+# ============================================================
+# WALK-IN KPI CALCULATIONS
+# ============================================================
+
+total_walkin = filtered_walkins[
+
+    "Customer_Key"
+
+].nunique()
+
+
+new_walkin = filtered_walkins[
+
+    filtered_walkins["New_Repeat"]
+
+    ==
+
+    "New"
+
+][
+
+    "Customer_Key"
+
+].nunique()
+
+
+repeat_walkin = filtered_walkins[
+
+    filtered_walkins["New_Repeat"]
+
+    ==
+
+    "Repeat"
+
+][
+
+    "Customer_Key"
+
+].nunique()
+
+
+converted_walkin = filtered_walkins[
+
+    filtered_walkins[
+
+        "Sales_Walkin_Tag"
+
+    ]
+
+    ==
+
+    "Converted"
+
+][
+
+    "Customer_Key"
+
+].nunique()
+
+
+# Conversion is:
+#
+# Unique Customers / Total Unique Walk-ins
+#
+
+conversion_percentage = (
+
+    unique_customer
+
+    /
+
+    total_walkin
+
+    *
+
+    100
+
+    if total_walkin > 0
+
+    else 0
+
+)
+
+
+new_walkin_percentage = (
+
+    new_walkin
+
+    /
+
+    total_walkin
+
+    *
+
+    100
+
+    if total_walkin > 0
+
+    else 0
+
+)
+
+
+repeat_walkin_percentage = (
+
+    repeat_walkin
+
+    /
+
+    total_walkin
+
+    *
+
+    100
+
+    if total_walkin > 0
+
+    else 0
+
+)
+
+
+# ============================================================
+# TARGET CALCULATIONS
+# ============================================================
+
+achievement_percentage = (
+
+    revenue
+
+    /
+
+    period_target
+
+    *
+
+    100
+
+    if period_target > 0
+
+    else 0
+
+)
+
+
+shortfall = (
+
+    period_target
+
+    -
+
+    revenue
+
+)
+
+
+# ============================================================
+# SALES KEY METRICS
+# ============================================================
+
+st.markdown(
+
+    '<div class="section-title">Sales Key Metrics</div>',
+
+    unsafe_allow_html=True
+
+)
+
+
+row1 = st.columns(4)
+
+
+render_kpi(
+
+    row1[0],
+
+    "Target",
+
+    f"₹{period_target:,.0f}"
+
+)
+
+
+render_kpi(
+
+    row1[1],
+
+    "Revenue",
+
+    f"₹{revenue:,.0f}"
+
+)
+
+
+render_kpi(
+
+    row1[2],
+
+    "Achievement %",
+
+    f"{achievement_percentage:.1f}%"
+
+)
+
+
+render_kpi(
+
+    row1[3],
+
+    "Shortfall",
+
+    f"₹{shortfall:,.0f}"
+
+)
+
+
+row2 = st.columns(4)
+
+
+render_kpi(
+
+    row2[0],
+
+    "Unique Invoice",
+
+    f"{unique_invoice:,}"
+
+)
+
+
+render_kpi(
+
+    row2[1],
+
+    "ATV",
+
+    f"₹{atv:,.0f}"
+
+)
+
+
+render_kpi(
+
+    row2[2],
+
+    "UPT",
+
+    f"{upt:.2f}"
+
+)
+
+
+render_kpi(
+
+    row2[3],
+
+    "Sales-Walkin Converted",
+
+    f"{converted_walkin:,}"
+
+)
+
+
+row3 = st.columns(4)
+
+
+render_kpi(
+
+    row3[0],
+
+    "Total Walk-in",
+
+    f"{total_walkin:,}"
+
+)
+
+
+render_kpi(
+
+    row3[1],
+
+    "Unique Customer",
+
+    f"{unique_customer:,}"
+
+)
+
+
+render_kpi(
+
+    row3[2],
+
+    "Conversion %",
+
+    f"{conversion_percentage:.1f}%"
+
+)
+
+
+render_kpi(
+
+    row3[3],
+
+    "Repeat %",
+
+    f"{repeat_percentage:.1f}%"
+
+)
+
+
+row4 = st.columns(4)
+
+
+render_kpi(
+
+    row4[0],
+
+    "New Customer",
+
+    f"{new_customer:,}"
+
+)
+
+
+render_kpi(
+
+    row4[1],
+
+    "Repeat Customer",
+
+    f"{repeat_customer:,}"
+
+)
+
+
+render_kpi(
+
+    row4[2],
+
+    "New %",
+
+    f"{new_percentage:.1f}%"
+
+)
+
+
+render_kpi(
+
+    row4[3],
+
+    "Revenue New Customer",
+
+    f"₹{revenue_new_customer:,.0f}"
+
+)
+
+
+row5 = st.columns(2)
+
+
+render_kpi(
+
+    row5[0],
+
+    "Revenue Repeat Customer",
+
+    f"₹{revenue_repeat_customer:,.0f}"
+
+)
+
+
+render_kpi(
+
+    row5[1],
+
+    "Revenue per Customer",
+
+    (
+
+        f"₹{revenue / unique_customer:,.0f}"
+
+        if unique_customer > 0
+
+        else "₹0"
+
+    )
+
+)
+
+
+# ============================================================
+# WALK-IN KEY METRICS
+# ============================================================
+
+st.markdown(
+
+    '<div class="section-title">Walk-in Key Metrics</div>',
+
+    unsafe_allow_html=True
+
+)
+
+
+walkin_row1 = st.columns(3)
+
+
+render_kpi(
+
+    walkin_row1[0],
+
+    "Total Unique Walk-in",
+
+    f"{total_walkin:,}"
+
+)
+
+
+render_kpi(
+
+    walkin_row1[1],
+
+    "New Walk-in",
+
+    f"{new_walkin:,}"
+
+)
+
+
+render_kpi(
+
+    walkin_row1[2],
+
+    "Repeat Walk-in",
+
+    f"{repeat_walkin:,}"
+
+)
+
+
+walkin_row2 = st.columns(2)
+
+
+render_kpi(
+
+    walkin_row2[0],
+
+    "New Walk-in %",
+
+    f"{new_walkin_percentage:.1f}%"
+
+)
+
+
+render_kpi(
+
+    walkin_row2[1],
+
+    "Repeat Walk-in %",
+
+    f"{repeat_walkin_percentage:.1f}%"
+
+)
+
+
+# ============================================================
+# TABS
+# ============================================================
+
+tab_trends, tab_sales, tab_walkin, tab_yoy, tab_raw = st.tabs(
+
+    [
+
+        "📈 Trends",
+
+        "💰 Sales",
+
+        "🚶 Walk-in",
+
+        "📊 Same Month vs Last Year",
+
+        "📄 Raw Data"
+
+    ]
+
+)
+
+
+# ============================================================
+# TAB 1 — TRENDS
+# ============================================================
+
+with tab_trends:
+
+
+    st.subheader(
+
+        "Sales Trend"
+
+    )
+
+
+    trend_sales = sales.copy()
+
+
     if selected_stores:
-        trend_source = trend_source[trend_source["Store"].isin(selected_stores)]
 
-    st.markdown('<div class="section-kicker">Monthly Net Sales Trend</div>', unsafe_allow_html=True)
-    monthly_trend = (
-        trend_source.groupby(["Month_Sort", "Month_Label"], as_index=False)["Net Amount"]
+        trend_sales = trend_sales[
+
+            trend_sales["Store"]
+
+            .isin(
+
+                selected_stores
+
+            )
+
+        ]
+
+
+    monthly_sales = (
+
+        trend_sales
+
+        .groupby(
+
+            [
+
+                "Month_Sort",
+
+                "Month_Label"
+
+            ]
+
+        )[
+
+            "Net Amount"
+
+        ]
+
         .sum()
-        .sort_values("Month_Sort")
-    )
-    monthly_trend["Net Sales (₹ Cr)"] = to_cr(monthly_trend["Net Amount"])
 
-    if not monthly_trend.empty:
-        fig_trend = px.area(
-            monthly_trend,
-            x="Month_Label",
-            y="Net Sales (₹ Cr)",
-            markers=True,
-            labels={"Month_Label": "Month"},
-        )
-        fig_trend.update_traces(
-            line_color=NAVY, fillcolor="rgba(92,26,43,0.10)",
-            marker=dict(color=GOLD, size=7),
-        )
-        fig_trend.update_layout(hovermode="x unified")
-        fig_trend.update_yaxes(tickformat=",.1f")
-        st.plotly_chart(
-            style_fig(fig_trend, show_legend=False, category_count=len(monthly_trend)),
-            use_container_width=True,
-        )
-    else:
-        st.info("No sales data available for this selection.")
-
-    st.markdown('<div class="section-kicker">Monthly Invoice Count</div>', unsafe_allow_html=True)
-    monthly_invoices = (
-        trend_source.groupby(["Month_Sort", "Month_Label"], as_index=False)["Invoice No"]
-        .nunique()
-        .sort_values("Month_Sort")
-        .rename(columns={"Invoice No": "Invoices"})
-    )
-    if not monthly_invoices.empty:
-        fig_inv = px.bar(monthly_invoices, x="Month_Label", y="Invoices", labels={"Month_Label": "Month"})
-        fig_inv = highlight_top(fig_inv, monthly_invoices["Invoices"].tolist())
-        st.plotly_chart(
-            style_fig(fig_inv, show_legend=False, category_count=len(monthly_invoices)),
-            use_container_width=True,
-        )
-
-# ---------------- TAB 2: STORE / CITY BREAKDOWN ----------------
-with tab_store:
-    col_a, col_b = st.columns(2)
-
-    with col_a:
-        st.markdown('<div class="section-kicker">Net Sales by Store</div>', unsafe_allow_html=True)
-        by_store = (
-            filtered_sales.groupby("Store", as_index=False)["Net Amount"]
-            .sum()
-            .sort_values("Net Amount", ascending=False)
-        )
-        by_store["Net Sales (₹ Cr)"] = to_cr(by_store["Net Amount"])
-        if not by_store.empty:
-            fig_store = px.bar(by_store, x="Store", y="Net Sales (₹ Cr)")
-            fig_store.update_yaxes(tickformat=",.1f")
-            fig_store = highlight_top(fig_store, by_store["Net Sales (₹ Cr)"].tolist())
-            st.plotly_chart(
-                style_fig(fig_store, show_legend=False, category_count=len(by_store)),
-                use_container_width=True,
-            )
-        else:
-            st.info("No data for this selection.")
-
-    with col_b:
-        st.markdown('<div class="section-kicker">Net Sales by City</div>', unsafe_allow_html=True)
-        by_city = (
-            filtered_sales.groupby("City", as_index=False)["Net Amount"]
-            .sum()
-            .sort_values("Net Amount", ascending=False)
-        )
-        by_city["Net Sales (₹ Cr)"] = to_cr(by_city["Net Amount"])
-        if not by_city.empty:
-            fig_city = px.pie(
-                by_city, names="City", values="Net Sales (₹ Cr)", hole=0.55,
-                color_discrete_sequence=[NAVY, GOLD, NAVY_SOFT, GOLD_SOFT, GRAY, "#8B4049", "#D9BB6F", "#B89A85"],
-            )
-            fig_city.update_traces(textfont_size=11.5, marker_line_width=1, marker_line_color="white")
-            st.plotly_chart(style_fig(fig_city, show_legend=True), use_container_width=True)
-        else:
-            st.info("No data for this selection.")
-
-    st.markdown('<div class="section-kicker">New vs Repeat Customers by Store</div>', unsafe_allow_html=True)
-    if "New/Repeat" in filtered_sales.columns:
-        nr_store = (
-            filtered_sales.groupby(["Store", "New/Repeat"])["Helper"]
-            .nunique()
-            .reset_index(name="Customers")
-        )
-        if not nr_store.empty:
-            fig_nr = px.bar(
-                nr_store, x="Store", y="Customers", color="New/Repeat", barmode="group",
-                color_discrete_map={"New": NAVY, "Repeat": GOLD},
-            )
-            st.plotly_chart(
-                style_fig(fig_nr, show_legend=True, category_count=nr_store["Store"].nunique()),
-                use_container_width=True,
-            )
-
-    st.markdown('<div class="section-kicker">Store-wise Breakdown</div>', unsafe_allow_html=True)
-    store_breakdown = (
-        filtered_sales.groupby("Store")
-        .agg(Net_Sales=("Net Amount", "sum"), Invoices=("Invoice No", "nunique"), Qty=("Qty", "sum"))
         .reset_index()
-    )
-    store_breakdown["Avg Bill"] = store_breakdown["Net_Sales"] / store_breakdown["Invoices"].replace(0, pd.NA)
-    store_breakdown["UPT"] = store_breakdown["Qty"] / store_breakdown["Invoices"].replace(0, pd.NA)
 
-    if "New/Repeat" in filtered_sales.columns and "Helper" in filtered_sales.columns:
-        nr_pivot = (
-            filtered_sales.groupby(["Store", "New/Repeat"])["Helper"]
-            .nunique()
-            .unstack(fill_value=0)
-            .reset_index()
+        .sort_values(
+
+            "Month_Sort"
+
         )
-        store_breakdown = store_breakdown.merge(nr_pivot, on="Store", how="left")
-        if "New" in store_breakdown.columns and "Repeat" in store_breakdown.columns:
-            store_breakdown["Repeat %"] = (
-                store_breakdown["Repeat"] / (store_breakdown["New"] + store_breakdown["Repeat"]) * 100
-            ).round(1)
 
-    store_breakdown = store_breakdown.rename(columns={"Net_Sales": "Net Sales"})
-    store_breakdown = store_breakdown.sort_values("Net Sales", ascending=False)
-
-    display_store_breakdown = store_breakdown.copy()
-    display_store_breakdown["Net Sales"] = display_store_breakdown["Net Sales"].apply(lambda v: f"₹{v:,.0f}")
-    display_store_breakdown["Avg Bill"] = display_store_breakdown["Avg Bill"].apply(
-        lambda v: f"₹{v:,.0f}" if pd.notna(v) else "N/A"
     )
-    display_store_breakdown["UPT"] = display_store_breakdown["UPT"].apply(
-        lambda v: f"{v:.2f}" if pd.notna(v) else "N/A"
-    )
-    st.dataframe(display_store_breakdown, use_container_width=True, hide_index=True)
 
-# ---------------- TAB 3: MONTH VS SAME MONTH LAST YEAR ----------------
-with tab_month_yoy:
-    st.markdown('<div class="section-kicker">Month vs Same Month Last Year</div>', unsafe_allow_html=True)
-    st.caption("Driven by the Month filter in the sidebar. Pick Apr-26 to compare it against Apr-25.")
 
-    if selected_month == "All":
-        st.info("👈 Select a specific month in the sidebar to see this comparison.")
+    if not monthly_sales.empty:
+
+
+        fig_sales = px.line(
+
+            monthly_sales,
+
+            x="Month_Label",
+
+            y="Net Amount",
+
+            markers=True,
+
+            title="Monthly Revenue Trend"
+
+        )
+
+
+        fig_sales.update_layout(
+
+            yaxis_title="Revenue",
+
+            xaxis_title="Month"
+
+        )
+
+
+        st.plotly_chart(
+
+            fig_sales,
+
+            use_container_width=True
+
+        )
+
+
     else:
-        current = pd.to_datetime(selected_month, format="%b-%y")
-        c_month, c_year = current.month, current.year
-        p_year = c_year - 1
-        this_label = current.strftime("%b %Y")
-        last_label = pd.Timestamp(year=p_year, month=c_month, day=1).strftime("%b %Y")
 
-        base_sales = sales.copy()
-        base_walkins = walkins.copy()
+        st.info(
+
+            "No sales data available."
+
+        )
+
+
+    # --------------------------------------------------------
+    # WALK-IN TREND
+    # --------------------------------------------------------
+
+    st.subheader(
+
+        "Walk-in Trend"
+
+    )
+
+
+    trend_walkins = walkins.copy()
+
+
+    if selected_stores:
+
+        trend_walkins = trend_walkins[
+
+            trend_walkins["Store"]
+
+            .isin(
+
+                selected_stores
+
+            )
+
+        ]
+
+
+    monthly_walkins = (
+
+        trend_walkins
+
+        .groupby(
+
+            [
+
+                "Month_Sort",
+
+                "Month_Label"
+
+            ]
+
+        )[
+
+            "Customer_Key"
+
+        ]
+
+        .nunique()
+
+        .reset_index(
+
+            name="Walk-ins"
+
+        )
+
+        .sort_values(
+
+            "Month_Sort"
+
+        )
+
+    )
+
+
+    if not monthly_walkins.empty:
+
+
+        fig_walkins = px.line(
+
+            monthly_walkins,
+
+            x="Month_Label",
+
+            y="Walk-ins",
+
+            markers=True,
+
+            title="Monthly Walk-in Trend"
+
+        )
+
+
+        st.plotly_chart(
+
+            fig_walkins,
+
+            use_container_width=True
+
+        )
+
+
+    # --------------------------------------------------------
+    # NEW VS REPEAT TREND
+    # --------------------------------------------------------
+
+    st.subheader(
+
+        "New vs Repeat Customer Trend"
+
+    )
+
+
+    new_repeat_trend = (
+
+        trend_sales
+
+        .groupby(
+
+            [
+
+                "Month_Sort",
+
+                "Month_Label",
+
+                "New_Repeat"
+
+            ]
+
+        )[
+
+            "Customer_Key"
+
+        ]
+
+        .nunique()
+
+        .reset_index(
+
+            name="Customers"
+
+        )
+
+        .sort_values(
+
+            "Month_Sort"
+
+        )
+
+    )
+
+
+    if not new_repeat_trend.empty:
+
+
+        fig_new_repeat = px.line(
+
+            new_repeat_trend,
+
+            x="Month_Label",
+
+            y="Customers",
+
+            color="New_Repeat",
+
+            markers=True,
+
+            title="New vs Repeat Customer Trend"
+
+        )
+
+
+        st.plotly_chart(
+
+            fig_new_repeat,
+
+            use_container_width=True
+
+        )
+
+
+# ============================================================
+# TAB 2 — SALES
+# ============================================================
+
+with tab_sales:
+
+
+    st.subheader(
+
+        "Store-wise Sales Performance"
+
+    )
+
+
+    store_sales = (
+
+        filtered_sales
+
+        .groupby(
+
+            "Store"
+
+        )
+
+        .agg(
+
+            Revenue=(
+
+                "Net Amount",
+
+                "sum"
+
+            ),
+
+            Unique_Invoice=(
+
+                "Invoice No",
+
+                "nunique"
+
+            ),
+
+            Qty=(
+
+                "Qty",
+
+                "sum"
+
+            ),
+
+            Unique_Customer=(
+
+                "Customer_Key",
+
+                "nunique"
+
+            ),
+
+            New_Customer=(
+
+                "Customer_Key",
+
+                lambda x:
+
+                x[
+
+                    filtered_sales.loc[
+
+                        x.index,
+
+                        "New_Repeat"
+
+                    ]
+
+                    ==
+
+                    "New"
+
+                ].nunique()
+
+            ),
+
+            Repeat_Customer=(
+
+                "Customer_Key",
+
+                lambda x:
+
+                x[
+
+                    filtered_sales.loc[
+
+                        x.index,
+
+                        "New_Repeat"
+
+                    ]
+
+                    ==
+
+                    "Repeat"
+
+                ].nunique()
+
+            )
+
+        )
+
+        .reset_index()
+
+    )
+
+
+    store_sales["ATV"] = (
+
+        store_sales["Revenue"]
+
+        /
+
+        store_sales["Unique_Invoice"]
+
+        .replace(
+
+            0,
+
+            pd.NA
+
+        )
+
+    )
+
+
+    store_sales["UPT"] = (
+
+        store_sales["Qty"]
+
+        /
+
+        store_sales["Unique_Invoice"]
+
+        .replace(
+
+            0,
+
+            pd.NA
+
+        )
+
+    )
+
+
+    store_sales["New %"] = (
+
+        store_sales["New_Customer"]
+
+        /
+
+        (
+
+            store_sales["New_Customer"]
+
+            +
+
+            store_sales["Repeat_Customer"]
+
+        )
+
+        *
+
+        100
+
+    )
+
+
+    store_sales["Repeat %"] = (
+
+        store_sales["Repeat_Customer"]
+
+        /
+
+        (
+
+            store_sales["New_Customer"]
+
+            +
+
+            store_sales["Repeat_Customer"]
+
+        )
+
+        *
+
+        100
+
+    )
+
+
+    store_sales = store_sales.sort_values(
+
+        "Revenue",
+
+        ascending=False
+
+    )
+
+
+    st.dataframe(
+
+        store_sales,
+
+        use_container_width=True,
+
+        hide_index=True
+
+    )
+
+
+    # --------------------------------------------------------
+    # SALES BY STORE CHART
+    # --------------------------------------------------------
+
+    st.subheader(
+
+        "Revenue by Store"
+
+    )
+
+
+    if not store_sales.empty:
+
+
+        fig_store = px.bar(
+
+            store_sales,
+
+            x="Store",
+
+            y="Revenue",
+
+            text_auto=".2s",
+
+            title="Store-wise Revenue"
+
+        )
+
+
+        st.plotly_chart(
+
+            fig_store,
+
+            use_container_width=True
+
+        )
+
+
+# ============================================================
+# TAB 3 — WALK-IN
+# ============================================================
+
+with tab_walkin:
+
+
+    st.subheader(
+
+        "Store-wise Walk-in Performance"
+
+    )
+
+
+    walkin_store = (
+
+        filtered_walkins
+
+        .groupby(
+
+            "Store"
+
+        )
+
+        .agg(
+
+            Total_Walkin=(
+
+                "Customer_Key",
+
+                "nunique"
+
+            ),
+
+            New_Walkin=(
+
+                "Customer_Key",
+
+                lambda x:
+
+                x[
+
+                    filtered_walkins.loc[
+
+                        x.index,
+
+                        "New_Repeat"
+
+                    ]
+
+                    ==
+
+                    "New"
+
+                ].nunique()
+
+            ),
+
+            Repeat_Walkin=(
+
+                "Customer_Key",
+
+                lambda x:
+
+                x[
+
+                    filtered_walkins.loc[
+
+                        x.index,
+
+                        "New_Repeat"
+
+                    ]
+
+                    ==
+
+                    "Repeat"
+
+                ].nunique()
+
+            ),
+
+            Converted_Walkin=(
+
+                "Customer_Key",
+
+                lambda x:
+
+                x[
+
+                    filtered_walkins.loc[
+
+                        x.index,
+
+                        "Sales_Walkin_Tag"
+
+                    ]
+
+                    ==
+
+                    "Converted"
+
+                ].nunique()
+
+            )
+
+        )
+
+        .reset_index()
+
+    )
+
+
+    walkin_store["Conversion %"] = (
+
+        walkin_store["Converted_Walkin"]
+
+        /
+
+        walkin_store["Total_Walkin"]
+
+        *
+
+        100
+
+    )
+
+
+    walkin_store["New %"] = (
+
+        walkin_store["New_Walkin"]
+
+        /
+
+        walkin_store["Total_Walkin"]
+
+        *
+
+        100
+
+    )
+
+
+    walkin_store["Repeat %"] = (
+
+        walkin_store["Repeat_Walkin"]
+
+        /
+
+        walkin_store["Total_Walkin"]
+
+        *
+
+        100
+
+    )
+
+
+    st.dataframe(
+
+        walkin_store,
+
+        use_container_width=True,
+
+        hide_index=True
+
+    )
+
+
+    # --------------------------------------------------------
+    # WALK-IN CHART
+    # --------------------------------------------------------
+
+    st.subheader(
+
+        "Walk-ins by Store"
+
+    )
+
+
+    if not walkin_store.empty:
+
+
+        fig_walkin_store = px.bar(
+
+            walkin_store,
+
+            x="Store",
+
+            y="Total_Walkin",
+
+            text_auto=True,
+
+            title="Total Unique Walk-ins by Store"
+
+        )
+
+
+        st.plotly_chart(
+
+            fig_walkin_store,
+
+            use_container_width=True
+
+        )
+
+
+# ============================================================
+# TAB 4 — SAME MONTH VS LAST YEAR
+# ============================================================
+
+with tab_yoy:
+
+
+    st.subheader(
+
+        "Same Month vs Last Year Same Month"
+
+    )
+
+
+    if not selected_months:
+
+
+        st.info(
+
+            "Please select a Month-YY from the sidebar."
+
+        )
+
+
+    else:
+
+
+        # Use the latest selected month
+
+        selected_month = selected_months[-1]
+
+
+        current_date = pd.to_datetime(
+
+            selected_month,
+
+            format="%b-%y"
+
+        )
+
+
+        current_month = current_date.month
+
+        current_year = current_date.year
+
+        previous_year = current_year - 1
+
+
+        # ----------------------------------------------------
+        # CURRENT YEAR
+        # ----------------------------------------------------
+
+        current_sales = sales[
+
+            (
+
+                sales["Month"]
+
+                ==
+
+                current_month
+
+            )
+
+            &
+
+            (
+
+                sales["Year"]
+
+                ==
+
+                current_year
+
+            )
+
+        ]
+
+
+        # ----------------------------------------------------
+        # LAST YEAR
+        # ----------------------------------------------------
+
+        last_year_sales = sales[
+
+            (
+
+                sales["Month"]
+
+                ==
+
+                current_month
+
+            )
+
+            &
+
+            (
+
+                sales["Year"]
+
+                ==
+
+                previous_year
+
+            )
+
+        ]
+
+
+        # Store filter
+
         if selected_stores:
-            base_sales = base_sales[base_sales["Store"].isin(selected_stores)]
-            base_walkins = base_walkins[base_walkins["Store"].isin(selected_stores)]
 
-        this_sales = base_sales[(base_sales["Month"] == c_month) & (base_sales["Year"] == c_year)]
-        last_sales = base_sales[(base_sales["Month"] == c_month) & (base_sales["Year"] == p_year)]
-        this_walk = base_walkins[(base_walkins["Month"] == c_month) & (base_walkins["Year"] == c_year)]
-        last_walk = base_walkins[(base_walkins["Month"] == c_month) & (base_walkins["Year"] == p_year)]
 
-        def compute_kpis(s_df, w_df):
-            net = s_df["Net Amount"].sum()
-            inv = s_df["Invoice No"].nunique()
-            new_c = s_df[s_df["New/Repeat"] == "New"]["Helper"].nunique()
-            rep_c = s_df[s_df["New/Repeat"] == "Repeat"]["Helper"].nunique()
-            rep_share = rep_c / (new_c + rep_c) * 100 if (new_c + rep_c) > 0 else 0
-            avg_bill_ = net / inv if inv > 0 else 0
-            walkins_n = w_df[
-                (w_df["New/Repeat"] == "New") & (w_df["unique cust count WRT num&Nam"] == 1)
-            ]["Helper"].nunique()
-            matched = w_df[
-                (w_df["Sales Matched"] == "Matched") & (w_df["unique cust count WRT num&Nam"] == 1)
-            ]["Helper"].nunique()
-            conv = matched / walkins_n * 100 if walkins_n > 0 else 0
-            upt_ = s_df["Qty"].sum() / inv if inv > 0 else 0
+            current_sales = current_sales[
+
+                current_sales["Store"]
+
+                .isin(
+
+                    selected_stores
+
+                )
+
+            ]
+
+
+            last_year_sales = last_year_sales[
+
+                last_year_sales["Store"]
+
+                .isin(
+
+                    selected_stores
+
+                )
+
+            ]
+
+
+        # ----------------------------------------------------
+        # KPI FUNCTION
+        # ----------------------------------------------------
+
+        def calculate_comparison_kpis(df):
+
+
+            revenue_value = df[
+
+                "Net Amount"
+
+            ].sum()
+
+
+            invoice_value = df[
+
+                "Invoice No"
+
+            ].nunique()
+
+
+            customer_value = df[
+
+                "Customer_Key"
+
+            ].nunique()
+
+
+            qty_value = df[
+
+                "Qty"
+
+            ].sum()
+
+
+            atv_value = (
+
+                revenue_value
+
+                /
+
+                invoice_value
+
+                if invoice_value > 0
+
+                else 0
+
+            )
+
+
+            upt_value = (
+
+                qty_value
+
+                /
+
+                invoice_value
+
+                if invoice_value > 0
+
+                else 0
+
+            )
+
+
             return {
-                "net": net, "inv": inv, "new_c": new_c, "rep_c": rep_c,
-                "rep_share": rep_share, "avg_bill": avg_bill_,
-                "walkins": walkins_n, "conv": conv, "upt": upt_,
+
+                "Revenue":
+
+                revenue_value,
+
+                "Unique Invoice":
+
+                invoice_value,
+
+                "Unique Customer":
+
+                customer_value,
+
+                "Qty":
+
+                qty_value,
+
+                "ATV":
+
+                atv_value,
+
+                "UPT":
+
+                upt_value
+
             }
 
-        this_kpi = compute_kpis(this_sales, this_walk)
-        last_kpi = compute_kpis(last_sales, last_walk)
 
-        def pct_delta(curr, prev):
-            return f"{(curr - prev) / prev * 100:+.1f}%" if prev > 0 else "N/A"
+        current_kpi = calculate_comparison_kpis(
 
-        st.markdown(f"##### {this_label} vs {last_label}")
+            current_sales
 
-        r1 = st.columns(4)
-        render_kpi(r1[0], "💎", "Net Sales", f"₹{this_kpi['net']:,.0f}", pct_delta(this_kpi["net"], last_kpi["net"]))
-        render_kpi(r1[1], "🧾", "Invoices", f"{this_kpi['inv']:,}", pct_delta(this_kpi["inv"], last_kpi["inv"]))
-        render_kpi(r1[2], "💳", "Avg Bill", f"₹{this_kpi['avg_bill']:,.0f}", pct_delta(this_kpi["avg_bill"], last_kpi["avg_bill"]))
-        render_kpi(r1[3], "📦", "UPT", f"{this_kpi['upt']:.2f}", pct_delta(this_kpi["upt"], last_kpi["upt"]))
-
-        st.write("")
-        r2 = st.columns(4)
-        render_kpi(r2[0], "🔁", "Repeat %", f"{this_kpi['rep_share']:.1f}%", pct_delta(this_kpi["rep_share"], last_kpi["rep_share"]))
-        render_kpi(r2[1], "🎯", "Conversion %", f"{this_kpi['conv']:.1f}%", pct_delta(this_kpi["conv"], last_kpi["conv"]))
-        render_kpi(r2[2], "🚶", "Walk-ins", f"{this_kpi['walkins']:,}", pct_delta(this_kpi["walkins"], last_kpi["walkins"]))
-        render_kpi(r2[3], "🆕", "New Customers", f"{this_kpi['new_c']:,}", pct_delta(this_kpi["new_c"], last_kpi["new_c"]))
-
-        st.write("")
-        st.markdown('<div class="section-kicker">Side-by-Side KPI Table</div>', unsafe_allow_html=True)
-        compare_df = pd.DataFrame({
-            "Metric": [
-                "Net Sales (₹)", "Invoices", "Avg Bill (₹)", "UPT",
-                "Repeat %", "Conversion %", "Walk-ins", "New Customers", "Repeat Customers",
-            ],
-            this_label: [
-                this_kpi["net"], this_kpi["inv"], this_kpi["avg_bill"], this_kpi["upt"],
-                this_kpi["rep_share"], this_kpi["conv"], this_kpi["walkins"],
-                this_kpi["new_c"], this_kpi["rep_c"],
-            ],
-            last_label: [
-                last_kpi["net"], last_kpi["inv"], last_kpi["avg_bill"], last_kpi["upt"],
-                last_kpi["rep_share"], last_kpi["conv"], last_kpi["walkins"],
-                last_kpi["new_c"], last_kpi["rep_c"],
-            ],
-        })
-        st.dataframe(compare_df, use_container_width=True, hide_index=True)
-
-        st.markdown('<div class="section-kicker">Net Sales Comparison</div>', unsafe_allow_html=True)
-        chart_df = pd.DataFrame({
-            "Period": [this_label, last_label],
-            "Net Sales (₹ Cr)": [to_cr(this_kpi["net"]), to_cr(last_kpi["net"])],
-        })
-        fig_month_compare = px.bar(chart_df, x="Period", y="Net Sales (₹ Cr)", color="Period", text_auto=".2f",
-                                    color_discrete_map={this_label: GOLD, last_label: NAVY_SOFT})
-        fig_month_compare.update_yaxes(tickformat=",.1f")
-        st.plotly_chart(style_fig(fig_month_compare, show_legend=False), use_container_width=True)
-
-with tab_assoc:
-    st.markdown('<div class="section-kicker">Sales Associate Performance</div>', unsafe_allow_html=True)
-    st.caption("Respects the Store and Month filters in the sidebar.")
-
-    matching_cols = [c for c in filtered_sales.columns if any(k in c.lower() for k in CANDIDATE_ASSOC_KEYWORDS)]
-
-    if not matching_cols:
-        st.warning(
-            "Couldn't automatically find a column identifying the sales associate. "
-            "Your Sales sheet's columns are listed below — let me know the exact "
-            "column name and I'll wire it in."
-        )
-        st.write(list(sales.columns))
-    else:
-        assoc_col = (
-            matching_cols[0] if len(matching_cols) == 1
-            else st.selectbox("Which column identifies the Sales Associate?", matching_cols, key="assoc_sales_col")
         )
 
-        assoc_sales = filtered_sales.dropna(subset=[assoc_col])
 
-        if assoc_sales.empty:
-            st.info("No data for this selection.")
-        else:
-            summary = (
-                assoc_sales.groupby(assoc_col)
-                .agg(Net_Sales=("Net Amount", "sum"), Invoices=("Invoice No", "nunique"), Qty=("Qty", "sum"))
-                .reset_index()
-            )
-            summary["Avg Bill"] = summary["Net_Sales"] / summary["Invoices"].replace(0, pd.NA)
-            summary["UPT"] = summary["Qty"] / summary["Invoices"].replace(0, pd.NA)
+        last_year_kpi = calculate_comparison_kpis(
 
-            if "New/Repeat" in assoc_sales.columns and "Helper" in assoc_sales.columns:
-                nr = (
-                    assoc_sales.groupby([assoc_col, "New/Repeat"])["Helper"]
-                    .nunique().unstack(fill_value=0).reset_index()
-                )
-                summary = summary.merge(nr, on=assoc_col, how="left")
+            last_year_sales
 
-            summary = summary.sort_values("Net_Sales", ascending=False).reset_index(drop=True)
+        )
 
-            top_n = min(3, len(summary))
-            st.markdown("##### 🏆 Top Performers")
-            top_cols = st.columns(top_n)
-            medals = ["🥇", "🥈", "🥉"]
-            for i in range(top_n):
-                row = summary.iloc[i]
-                render_kpi(top_cols[i], medals[i], row[assoc_col], f"₹{row['Net_Sales']:,.0f}")
 
-            st.write("")
+        # ----------------------------------------------------
+        # DISPLAY
+        # ----------------------------------------------------
 
-            col_a, col_b = st.columns(2)
-            with col_a:
-                st.markdown('<div class="section-kicker">Net Sales by Associate</div>', unsafe_allow_html=True)
-                summary["Net Sales (₹ Cr)"] = to_cr(summary["Net_Sales"])
-                fig_assoc_sales = px.bar(summary, x=assoc_col, y="Net Sales (₹ Cr)")
-                fig_assoc_sales.update_yaxes(tickformat=",.2f")
-                fig_assoc_sales = highlight_top(fig_assoc_sales, summary["Net Sales (₹ Cr)"].tolist())
-                st.plotly_chart(
-                    style_fig(fig_assoc_sales, show_legend=False, category_count=len(summary)),
-                    use_container_width=True,
-                )
+        current_label = current_date.strftime(
 
-            with col_b:
-                st.markdown('<div class="section-kicker">Total Walk-ins by Associate</div>', unsafe_allow_html=True)
-                walkin_matching_cols = [
-                    c for c in filtered_walkins.columns if any(k in c.lower() for k in CANDIDATE_ASSOC_KEYWORDS)
+            "%b %Y"
+
+        )
+
+
+        last_year_label = pd.Timestamp(
+
+            year=previous_year,
+
+            month=current_month,
+
+            day=1
+
+        ).strftime(
+
+            "%b %Y"
+
+        )
+
+
+        comparison_df = pd.DataFrame(
+
+            {
+
+                "Metric": [
+
+                    "Revenue",
+
+                    "Unique Invoice",
+
+                    "ATV",
+
+                    "UPT",
+
+                    "Unique Customer",
+
+                    "Qty"
+
+                ],
+
+                current_label: [
+
+                    current_kpi["Revenue"],
+
+                    current_kpi["Unique Invoice"],
+
+                    current_kpi["ATV"],
+
+                    current_kpi["UPT"],
+
+                    current_kpi["Unique Customer"],
+
+                    current_kpi["Qty"]
+
+                ],
+
+                last_year_label: [
+
+                    last_year_kpi["Revenue"],
+
+                    last_year_kpi["Unique Invoice"],
+
+                    last_year_kpi["ATV"],
+
+                    last_year_kpi["UPT"],
+
+                    last_year_kpi["Unique Customer"],
+
+                    last_year_kpi["Qty"]
+
                 ]
-                if not walkin_matching_cols:
-                    st.info(
-                        "Couldn't find a sales-associate column in the Walk-ins sheet. "
-                        "Available columns are listed below."
-                    )
-                    st.write(list(walkins.columns))
-                else:
-                    walk_assoc_col = (
-                        walkin_matching_cols[0] if len(walkin_matching_cols) == 1
-                        else st.selectbox(
-                            "Which Walk-ins column identifies the Sales Associate?",
-                            walkin_matching_cols, key="assoc_walkin_col",
-                        )
-                    )
-                    walkin_summary = (
-                        filtered_walkins[
-                            (filtered_walkins["New/Repeat"] == "New") &
-                            (filtered_walkins["unique cust count WRT num&Nam"] == 1)
-                        ]
-                        .dropna(subset=[walk_assoc_col])
-                        .groupby(walk_assoc_col)["Helper"]
-                        .nunique()
-                        .reset_index(name="Walk-ins")
-                        .sort_values("Walk-ins", ascending=False)
-                    )
-                    if walkin_summary.empty:
-                        st.info("No walk-in data for this selection.")
-                    else:
-                        fig_walk = px.bar(walkin_summary, x=walk_assoc_col, y="Walk-ins")
-                        fig_walk = highlight_top(fig_walk, walkin_summary["Walk-ins"].tolist())
-                        st.plotly_chart(
-                            style_fig(fig_walk, show_legend=False, category_count=len(walkin_summary)),
-                            use_container_width=True,
-                        )
 
-            st.markdown('<div class="section-kicker">Full Breakdown</div>', unsafe_allow_html=True)
-            display_summary = summary.copy()
-            display_summary["Net_Sales"] = display_summary["Net_Sales"].apply(lambda v: f"₹{v:,.0f}")
-            display_summary["Avg Bill"] = display_summary["Avg Bill"].apply(lambda v: f"₹{v:,.0f}" if pd.notna(v) else "N/A")
-            display_summary["UPT"] = display_summary["UPT"].apply(lambda v: f"{v:.2f}" if pd.notna(v) else "N/A")
-            display_summary = display_summary.rename(columns={"Net_Sales": "Net Sales"})
-            st.dataframe(display_summary, use_container_width=True, hide_index=True)
+            }
 
-            st.markdown('<div class="section-kicker">🎯 Agent Target & Achievement</div>', unsafe_allow_html=True)
-            scope_label = f"Month: {selected_month}" if selected_month != "All" else "Overall (all months)"
-            st.caption(
-                f"From the Team Target sheet. Achievement % = Agent's Net Sales ÷ Agent's Target. "
-                f"Currently showing: {scope_label}."
-            )
-
-            if team_targets.empty:
-                st.info(
-                    "Couldn't load agent-level targets — either the 'Team Target' tab wasn't found in "
-                    "the Targets spreadsheet, its columns don't match Store Name / Agent Name / Target / "
-                    "Month-YY, or it's not shared with the service account yet."
-                )
-            else:
-                agent_sales = (
-                    assoc_sales.groupby(assoc_col)["Net Amount"]
-                    .sum()
-                    .reset_index()
-                    .rename(columns={assoc_col: "Agent", "Net Amount": "Net Sales"})
-                )
-
-                team_target_scope = team_targets.copy()
-                if selected_stores:
-                    team_target_scope = team_target_scope[team_target_scope["Store"].isin(selected_stores)]
-                if selected_month != "All":
-                    team_target_scope = team_target_scope[team_target_scope["Month_Label"] == selected_month]
-
-                agent_target = team_target_scope.groupby("Agent", as_index=False)["Target"].sum()
-
-                agent_ach = pd.merge(agent_sales, agent_target, on="Agent", how="outer").fillna(0)
-                agent_ach["Achievement %"] = agent_ach.apply(
-                    lambda r: round(r["Net Sales"] / r["Target"] * 100, 1) if r["Target"] > 0 else None,
-                    axis=1,
-                )
-                agent_ach = agent_ach.sort_values("Net Sales", ascending=False)
-
-                if agent_ach.empty:
-                    st.info("No agent target data for this selection.")
-                else:
-                    display_agent_ach = agent_ach.copy()
-                    display_agent_ach["Net Sales"] = display_agent_ach["Net Sales"].apply(lambda v: f"₹{v:,.0f}")
-                    display_agent_ach["Target"] = display_agent_ach["Target"].apply(
-                        lambda v: f"₹{v:,.0f}" if v > 0 else "N/A"
-                    )
-                    display_agent_ach["Achievement %"] = display_agent_ach["Achievement %"].apply(
-                        lambda v: f"{v:.1f}%" if pd.notna(v) else "N/A"
-                    )
-                    st.dataframe(display_agent_ach, use_container_width=True, hide_index=True)
-
-                    st.caption(
-                        "Note: this matches Sales-sheet associate names against Team Target's "
-                        "Agent Name exactly. If an agent shows 'N/A' Target despite having sales, "
-                        "double-check the spelling matches between the two sheets."
-                    )
-
-# ---------------- TAB 5: WALK-IN SUMMARY ----------------
-with tab_walkin:
-    st.markdown('<div class="section-kicker">Walk-in Summary</div>', unsafe_allow_html=True)
-    st.caption(
-        "Respects the Store and Month filters in the sidebar. Conversion = unique "
-        "'Matched' walk-ins ÷ total unique walk-ins. New/Repeat uses the same logic as the Sales tabs."
-    )
-
-    walkin_new = filtered_walkins[filtered_walkins["New/Repeat"] == "New"]["Helper"].nunique()
-    walkin_repeat = filtered_walkins[filtered_walkins["New/Repeat"] == "Repeat"]["Helper"].nunique()
-    walkin_repeat_share = (
-        walkin_repeat / (walkin_new + walkin_repeat) * 100
-        if (walkin_new + walkin_repeat) > 0 else 0
-    )
-
-    # total_walkins, matched_walkins, conversion are already computed globally
-    # from filtered_walkins using the same "unique cust count WRT num&Nam" == 1
-    # de-duplication rule — reused here for consistency.
-    wr1 = st.columns(3)
-    render_kpi(wr1[0], "🚶", "Total Unique Walk-ins", f"{total_walkins:,}")
-    render_kpi(wr1[1], "✅", "Matched (Converted)", f"{matched_walkins:,}")
-    render_kpi(wr1[2], "🎯", "Conversion %", f"{conversion:.1f}%")
-
-    st.write("")
-
-    wr2 = st.columns(3)
-    render_kpi(wr2[0], "🆕", "New Walk-ins", f"{walkin_new:,}")
-    render_kpi(wr2[1], "🔁", "Repeat Walk-ins", f"{walkin_repeat:,}")
-    render_kpi(wr2[2], "📊", "Repeat Share %", f"{walkin_repeat_share:.1f}%")
-
-    st.write("")
-    st.markdown("---")
-
-    col_a, col_b = st.columns(2)
-
-    with col_a:
-        st.markdown('<div class="section-kicker">Walk-ins by Store</div>', unsafe_allow_html=True)
-        walkin_by_store = (
-            filtered_walkins[filtered_walkins["unique cust count WRT num&Nam"] == 1]
-            .groupby("Store")["Helper"]
-            .nunique()
-            .reset_index(name="Walk-ins")
-            .sort_values("Walk-ins", ascending=False)
         )
-        if not walkin_by_store.empty:
-            fig_walkin_store = px.bar(walkin_by_store, x="Store", y="Walk-ins")
-            fig_walkin_store = highlight_top(fig_walkin_store, walkin_by_store["Walk-ins"].tolist())
-            st.plotly_chart(
-                style_fig(fig_walkin_store, show_legend=False, category_count=len(walkin_by_store)),
-                use_container_width=True,
-            )
-        else:
-            st.info("No walk-in data for this selection.")
 
-    with col_b:
-        st.markdown('<div class="section-kicker">New vs Repeat Walk-ins by Store</div>', unsafe_allow_html=True)
-        nr_walkin_store = (
-            filtered_walkins.groupby(["Store", "New/Repeat"])["Helper"]
-            .nunique()
-            .reset_index(name="Walk-ins")
-        )
-        if not nr_walkin_store.empty:
-            fig_nr_walkin = px.bar(
-                nr_walkin_store, x="Store", y="Walk-ins", color="New/Repeat", barmode="group",
-                color_discrete_map={"New": NAVY, "Repeat": GOLD},
-            )
-            st.plotly_chart(
-                style_fig(fig_nr_walkin, show_legend=True, category_count=nr_walkin_store["Store"].nunique()),
-                use_container_width=True,
-            )
-        else:
-            st.info("No walk-in data for this selection.")
 
-    st.markdown('<div class="section-kicker">Monthly Walk-in Trend</div>', unsafe_allow_html=True)
-    walkin_trend_source = walkins.copy()
-    if selected_stores:
-        walkin_trend_source = walkin_trend_source[walkin_trend_source["Store"].isin(selected_stores)]
+        st.dataframe(
 
-    walkin_monthly = (
-        walkin_trend_source[walkin_trend_source["unique cust count WRT num&Nam"] == 1]
-        .groupby(["Month_Sort", "Month_Label"])["Helper"]
-        .nunique()
-        .reset_index(name="Walk-ins")
-        .sort_values("Month_Sort")
-    )
-    if not walkin_monthly.empty:
-        fig_walkin_trend = px.area(walkin_monthly, x="Month_Label", y="Walk-ins", markers=True)
-        fig_walkin_trend.update_traces(
-            line_color=NAVY, fillcolor="rgba(92,26,43,0.10)",
-            marker=dict(color=GOLD, size=7),
-        )
-        fig_walkin_trend.update_layout(hovermode="x unified")
-        st.plotly_chart(
-            style_fig(fig_walkin_trend, show_legend=False, category_count=len(walkin_monthly)),
+            comparison_df,
+
             use_container_width=True,
+
+            hide_index=True
+
         )
-    else:
-        st.info("No walk-in data available for this selection.")
 
-    st.markdown('<div class="section-kicker">Store-wise Breakdown</div>', unsafe_allow_html=True)
-    store_summary = (
-        filtered_walkins[filtered_walkins["unique cust count WRT num&Nam"] == 1]
-        .groupby("Store")
-        .agg(Total_Walkins=("Helper", "nunique"))
-        .reset_index()
-    )
-    matched_by_store = (
-        filtered_walkins[
-            (filtered_walkins["Sales Matched"] == "Matched") &
-            (filtered_walkins["unique cust count WRT num&Nam"] == 1)
-        ]
-        .groupby("Store")["Helper"]
-        .nunique()
-        .reset_index(name="Matched")
-    )
-    store_summary = store_summary.merge(matched_by_store, on="Store", how="left")
-    store_summary["Matched"] = store_summary["Matched"].fillna(0).astype(int)
-    store_summary["Conversion %"] = (
-        store_summary["Matched"] / store_summary["Total_Walkins"] * 100
-    ).round(1)
 
-    nr_by_store = (
-        filtered_walkins.groupby(["Store", "New/Repeat"])["Helper"]
-        .nunique()
-        .unstack(fill_value=0)
-        .reset_index()
-    )
-    store_summary = store_summary.merge(nr_by_store, on="Store", how="left")
-    store_summary = store_summary.rename(columns={"Total_Walkins": "Total Walk-ins"})
-    store_summary = store_summary.sort_values("Total Walk-ins", ascending=False)
-    st.dataframe(store_summary, use_container_width=True, hide_index=True)
+        # ----------------------------------------------------
+        # REVENUE COMPARISON
+        # ----------------------------------------------------
 
-# ---------------- TAB 6: RAW DATA ----------------
-with tab_data:
-    st.markdown('<div class="section-kicker">Sales Data</div>', unsafe_allow_html=True)
-    st.dataframe(filtered_sales, use_container_width=True, hide_index=True)
+        chart_df = pd.DataFrame(
+
+            {
+
+                "Period": [
+
+                    current_label,
+
+                    last_year_label
+
+                ],
+
+                "Revenue": [
+
+                    current_kpi["Revenue"],
+
+                    last_year_kpi["Revenue"]
+
+                ]
+
+            }
+
+        )
+
+
+        fig_yoy = px.bar(
+
+            chart_df,
+
+            x="Period",
+
+            y="Revenue",
+
+            text_auto=".2s",
+
+            title=(
+
+                f"{current_label} vs "
+
+                f"{last_year_label}"
+
+            )
+
+        )
+
+
+        st.plotly_chart(
+
+            fig_yoy,
+
+            use_container_width=True
+
+        )
+
+
+# ============================================================
+# TAB 5 — RAW DATA
+# ============================================================
+
+with tab_raw:
+
+
+    st.subheader(
+
+        "Filtered Sales Data"
+
+    )
+
+
+    st.dataframe(
+
+        filtered_sales,
+
+        use_container_width=True,
+
+        hide_index=True
+
+    )
+
+
     st.download_button(
-        "⬇️ Download filtered sales as CSV",
-        data=filtered_sales.to_csv(index=False).encode("utf-8"),
+
+        "⬇️ Download Sales CSV",
+
+        data=filtered_sales.to_csv(
+
+            index=False
+
+        ).encode(
+
+            "utf-8"
+
+        ),
+
         file_name="filtered_sales.csv",
-        mime="text/csv",
+
+        mime="text/csv"
+
     )
 
-    st.markdown("---")
 
-    st.markdown('<div class="section-kicker">Walk-in Data</div>', unsafe_allow_html=True)
-    st.dataframe(filtered_walkins, use_container_width=True, hide_index=True)
+    st.divider()
+
+
+    st.subheader(
+
+        "Filtered Walk-in Data"
+
+    )
+
+
+    st.dataframe(
+
+        filtered_walkins,
+
+        use_container_width=True,
+
+        hide_index=True
+
+    )
+
+
     st.download_button(
-        "⬇️ Download filtered walk-ins as CSV",
-        data=filtered_walkins.to_csv(index=False).encode("utf-8"),
+
+        "⬇️ Download Walk-in CSV",
+
+        data=filtered_walkins.to_csv(
+
+            index=False
+
+        ).encode(
+
+            "utf-8"
+
+        ),
+
         file_name="filtered_walkins.csv",
-        mime="text/csv",
+
+        mime="text/csv"
+
     )
