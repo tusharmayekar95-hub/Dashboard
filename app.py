@@ -979,9 +979,9 @@ with tab_product:
             return
         st.dataframe(format_product_table(tbl, col), use_container_width=True, hide_index=True)
 
-    _render_product_section("By Product Category", category_col)
-    st.markdown("---")
     _render_product_section("By Collection", collection_col)
+    st.markdown("---")
+    _render_product_section("By Product Category", category_col)
     st.markdown("---")
     _render_product_section("By Price Band", priceband_col)
 
