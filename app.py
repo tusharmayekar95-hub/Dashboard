@@ -6,6 +6,7 @@ import plotly.express as px
 import gspread
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe
+from pathlib import Path
 
 # =====================================================
 # PAGE CONFIGURATION
@@ -18,12 +19,6 @@ st.set_page_config(
 
 # =====================================================
 # ⚠️  COLUMN CONFIG — CHECK / EDIT THESE ⚠️
-# I don't have your live sheet in front of me, so these are best-guess
-# names for the fields the new "Name + Mobile Number" customer-matching
-# logic needs. If a name below doesn't exist in your sheet, the app will
-# try to auto-detect a matching column (see `_autodetect_col`) and warn
-# you in the sidebar if it still can't find one — it will NOT silently
-# produce wrong numbers.
 # =====================================================
 SALES_DATE_COL = "Date"
 SALES_STORE_COL = "Store"
@@ -31,17 +26,38 @@ SALES_CITY_COL = "City"
 SALES_INVOICE_COL = "Invoice No"
 SALES_NET_COL = "Net Amount"
 SALES_QTY_COL = "Qty"
-SALES_NAME_COL = "Customer Name"        # <-- confirm/edit
-SALES_PHONE_COL = "Mobile Number"       # <-- confirm/edit
+SALES_NAME_COL = "Customer Name"
+SALES_PHONE_COL = "Mobile Number"
 
 WALKIN_DATE_COL = "Date"
 WALKIN_STORE_COL = "Store"
-WALKIN_NAME_COL = "Customer Name"       # <-- confirm/edit
-WALKIN_PHONE_COL = "Mobile Number"      # <-- confirm/edit
+WALKIN_NAME_COL = "Customer Name"
+WALKIN_PHONE_COL = "Mobile Number"
 
-SALES_CATEGORY_COL = "Product Category"  # <-- confirm/edit
-SALES_COLLECTION_COL = "Collection"      # <-- confirm/edit
-SALES_PRICEBAND_COL = "Price band"       # <-- confirm/edit
+SALES_CATEGORY_COL = "Product Category"
+SALES_COLLECTION_COL = "Collection"
+SALES_PRICEBAND_COL = "Price band"
+
+# =====================================================
+# LIMECHAT CONFIGURATION
+# =====================================================
+BASE_DIR = Path(__file__).parent
+LIMECHAT_FILE = BASE_DIR / "Data" / "Lime Chat.xlsx"
+
+LIMECHAT_DATE_COL = "Date"
+LIMECHAT_PHONE_COL = "Phone Number"
+LIMECHAT_INBOX_COL = "Inbox Name"
+LIMECHAT_AGENT_COL = "Current Agent"
+LIMECHAT_CONTACT_BLOCKS_COL = "Contact Message Blocks"
+LIMECHAT_MAIN_TAG_COL = "Main Tag"
+LIMECHAT_TICKET_COL = "Ticket ID"  # auto-detected below; metrics using it degrade gracefully if missing
+
+LIMECHAT_L1_COL = "Level 1 Tags (Main)"
+LIMECHAT_L2_COL = "Level 2 Tags"
+LIMECHAT_L3_COL = "Level 3 Tags"
+LIMECHAT_LEAD_QUALITY_COL = "Custom Lead Quality"
+
+LIMECHAT_JUNK_TAG = "junk"
 
 ASSOC_KEYWORDS = [
     "associate", "executive", "salesperson", "sales person",
@@ -214,6 +230,10 @@ def _melt_targets(df):
 
 
 def _clean_team_targets(df):
+    """Team Target tab: Store Name | Agent Name | Target | Month-YY.
+    Returns None (not a warning) if the structure doesn't match — st.warning
+    should never be called from inside a @st.cache_data function, so the
+    caller decides whether/how to surface that."""
     df = df.copy()
     rename_map = {}
     for c in df.columns:
@@ -230,6 +250,7 @@ def _clean_team_targets(df):
     required = {"Store", "Agent", "Target", "Month_Label"}
     if not required.issubset(df.columns):
         return None
+
     df["Store"] = df["Store"].astype(str).str.strip()
     df["Agent"] = df["Agent"].astype(str).str.strip()
     df["Month_Label"] = df["Month_Label"].astype(str).str.strip()
@@ -247,6 +268,7 @@ def load_data():
         st.secrets["gcp_service_account"],
         scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
     )
+
     client = gspread.authorize(creds)
 
     sales_ss = client.open_by_key(SALES_SHEET_ID)
@@ -261,10 +283,14 @@ def load_data():
     walkins = get_as_dataframe(walkins_ws, evaluate_formulas=True)
     targets_raw = get_as_dataframe(targets_ws, evaluate_formulas=True)
 
+    limechat = pd.read_excel(LIMECHAT_FILE, engine="openpyxl")
+
     sales = sales.dropna(how="all").dropna(axis=1, how="all")
     walkins = walkins.dropna(how="all").dropna(axis=1, how="all")
     targets_raw = targets_raw.dropna(how="all").dropna(axis=1, how="all")
+    limechat = limechat.dropna(how="all").dropna(axis=1, how="all")
 
+    # ---- Sales dates ----
     sales[SALES_DATE_COL] = pd.to_datetime(sales[SALES_DATE_COL], errors="coerce")
     sales["Year"] = sales[SALES_DATE_COL].dt.year
     sales["Month"] = sales[SALES_DATE_COL].dt.month
@@ -272,6 +298,7 @@ def load_data():
     sales["Month_Sort"] = sales[SALES_DATE_COL].dt.strftime("%Y-%m")
     sales["Date_Str"] = sales[SALES_DATE_COL].dt.strftime("%d-%b-%Y")
 
+    # ---- Walk-in dates ----
     walkins[WALKIN_DATE_COL] = pd.to_datetime(walkins[WALKIN_DATE_COL], errors="coerce")
     walkins["Year"] = walkins[WALKIN_DATE_COL].dt.year
     walkins["Month"] = walkins[WALKIN_DATE_COL].dt.month
@@ -279,8 +306,42 @@ def load_data():
     walkins["Month_Sort"] = walkins[WALKIN_DATE_COL].dt.strftime("%Y-%m")
     walkins["Date_Str"] = walkins[WALKIN_DATE_COL].dt.strftime("%d-%b-%Y")
 
+    # ---- LimeChat dates ----
+    limechat[LIMECHAT_DATE_COL] = pd.to_datetime(limechat[LIMECHAT_DATE_COL], errors="coerce")
+    limechat["Year"] = limechat[LIMECHAT_DATE_COL].dt.year
+    limechat["Month"] = limechat[LIMECHAT_DATE_COL].dt.month
+    limechat["Month_Label"] = limechat[LIMECHAT_DATE_COL].dt.strftime("%b-%y")
+    limechat["Month_Sort"] = limechat[LIMECHAT_DATE_COL].dt.strftime("%Y-%m")
+    limechat["Date_Str"] = limechat[LIMECHAT_DATE_COL].dt.strftime("%d-%b-%Y")
+
+    # ---- LimeChat phone normalization ----
+    limechat["Customer_Key"] = limechat[LIMECHAT_PHONE_COL].apply(_normalize_phone)
+    limechat["Phone_Status"] = np.where(limechat["Customer_Key"].str.len() >= 10, "Valid", "Invalid")
+
+    # ---- LimeChat New/Repeat: identified by phone, computed within Inbox+Agent ----
+    limechat["New/Repeat"] = None
+    valid_phone_mask = limechat["Customer_Key"].ne("")
+    first_month = (
+        limechat[valid_phone_mask]
+        .groupby([LIMECHAT_INBOX_COL, LIMECHAT_AGENT_COL, "Customer_Key"])["Month_Sort"]
+        .min()
+        .reset_index()
+        .rename(columns={"Month_Sort": "First_Month"})
+    )
+    limechat = limechat.merge(first_month, on=[LIMECHAT_INBOX_COL, LIMECHAT_AGENT_COL, "Customer_Key"], how="left")
+    limechat.loc[limechat["Month_Sort"] == limechat["First_Month"], "New/Repeat"] = "New"
+    limechat.loc[limechat["Month_Sort"] > limechat["First_Month"], "New/Repeat"] = "Repeat"
+    limechat.drop(columns=["First_Month"], inplace=True, errors="ignore")
+
+    # ---- LimeChat interaction status (Contact Message Blocks >= 3) ----
+    limechat[LIMECHAT_CONTACT_BLOCKS_COL] = pd.to_numeric(limechat[LIMECHAT_CONTACT_BLOCKS_COL], errors="coerce").fillna(0)
+    limechat["Interaction_Status"] = np.where(limechat[LIMECHAT_CONTACT_BLOCKS_COL] >= 3, "Interacted", "Non Interacted")
+    limechat["Main_Tag_Clean"] = limechat[LIMECHAT_MAIN_TAG_COL].astype(str).str.strip().str.lower()
+    limechat["Is_Junk"] = limechat["Main_Tag_Clean"] == LIMECHAT_JUNK_TAG
+
     targets = _melt_targets(targets_raw)
 
+    # ---- Team Target lives on its OWN tab, not the Store Targets pivot ----
     team_targets = pd.DataFrame(columns=["Store", "Agent", "Month_Label", "Month_Sort", "Target"])
     try:
         team_target_ws = targets_ss.worksheet("Team Target")
@@ -292,12 +353,9 @@ def load_data():
     except gspread.exceptions.WorksheetNotFound:
         pass
 
-    return sales, walkins, targets, team_targets
+    return sales, walkins, targets, team_targets, limechat
 
 
-# =====================================================
-# CUSTOMER MATCHING (Mobile Number priority, else Name) + New/Repeat (MoM) + Sales_Walkin Tag
-# =====================================================
 def _autodetect_col(columns, keywords, exclude=None):
     exclude = exclude or []
     for c in columns:
@@ -316,8 +374,6 @@ def _resolve_col(df, configured_name, keywords, exclude=None):
 
 
 def _find_column_ci(df, name):
-    """Case/whitespace-insensitive exact column match (used for Product
-    Category / Collection / Price band, which don't need keyword guessing)."""
     if name in df.columns:
         return name
     target = name.strip().lower()
@@ -340,8 +396,6 @@ def _normalize_name(x):
 
 
 def build_customer_key(df, name_col, phone_col):
-    """Mobile Number is the priority identifier; fall back to Name if the
-    number is missing/blank. Rows with neither are left unmatched (None)."""
     if phone_col and phone_col in df.columns:
         phone = df[phone_col].apply(_normalize_phone)
     else:
@@ -358,10 +412,6 @@ def build_customer_key(df, name_col, phone_col):
 
 
 def tag_new_repeat(df, store_col, key_col, month_sort_col):
-    """A customer is 'New' the first month (by Store) they ever transacted —
-    including if they transact multiple times that same month. Any later
-    month they show up in again is 'Repeat'. Rows with no identifiable
-    customer key are left untagged."""
     df = df.copy()
     valid_mask = df[key_col].notna()
     if not valid_mask.any():
@@ -385,9 +435,6 @@ def tag_new_repeat(df, store_col, key_col, month_sort_col):
 
 
 def tag_sales_walkin_conversion(walkins_df, sales_df, walk_key_col, sales_key_col, walk_date_col, sales_date_col):
-    """Marks a walk-in row 'Converted' if the same Name/Number customer has
-    a matching Sales transaction on the same calendar day (which by
-    definition is also the same month)."""
     wdf = walkins_df.copy()
     if sales_df.empty or wdf.empty:
         wdf["Sales_Walkin_Tag"] = "Not Converted"
@@ -405,15 +452,36 @@ def tag_sales_walkin_conversion(walkins_df, sales_df, walk_key_col, sales_key_co
     return wdf
 
 
+def tag_limechat_conversion(limechat_df, sales_df, sales_phone_col):
+    """Marks a LimeChat row 'Converted' if that phone number (LimeChat's
+    Phone Number, matched against Sales' Mobile Number) bought in Sales
+    within the same month as the chat. Set-based lookup — O(n), not a
+    per-row scan of the Sales table."""
+    ldf = limechat_df.copy()
+    if sales_df.empty or ldf.empty or not sales_phone_col or sales_phone_col not in sales_df.columns:
+        ldf["Sales_Conversion"] = "Not Converted"
+        return ldf
+    sdf = sales_df[[sales_phone_col, "Month_Sort"]].copy()
+    sdf["_Phone"] = sdf[sales_phone_col].apply(_normalize_phone)
+    sdf = sdf[sdf["_Phone"] != ""]
+    sales_lookup = set(zip(sdf["_Phone"], sdf["Month_Sort"]))
+    ldf["Sales_Conversion"] = [
+        "Converted" if (p, m) in sales_lookup else "Not Converted"
+        for p, m in zip(ldf["Customer_Key"], ldf["Month_Sort"])
+    ]
+    return ldf
+
+
 try:
-    sales, walkins, targets, team_targets = load_data()
+    sales, walkins, targets, team_targets, limechat = load_data()
 except Exception as e:
     st.error(
-        f"Could not load data from Google Sheets: {e}\n\n"
+        f"Could not load data: {e}\n\n"
         "Check that:\n"
         "1. `.streamlit/secrets.toml` has a `[gcp_service_account]` section.\n"
-        "2. All three sheets are shared with the service account's email.\n"
-        "3. The sheet IDs / gid values at the top of the file are correct."
+        "2. All sheets are shared with the service account's email.\n"
+        "3. `Data/Lime Chat.xlsx` exists in the repo (this one is a local file, not a Google Sheet).\n"
+        "4. The sheet IDs / gid values at the top of the file are correct."
     )
     st.stop()
 
@@ -423,10 +491,10 @@ sales_phone_col = _resolve_col(sales, SALES_PHONE_COL, PHONE_KEYWORDS)
 walkin_name_col = _resolve_col(walkins, WALKIN_NAME_COL, NAME_KEYWORDS, exclude=["store", "associate"])
 walkin_phone_col = _resolve_col(walkins, WALKIN_PHONE_COL, PHONE_KEYWORDS)
 
-# ---- resolve Product Category / Collection / Price band (Sales only) ----
 category_col = _find_column_ci(sales, SALES_CATEGORY_COL)
 collection_col = _find_column_ci(sales, SALES_COLLECTION_COL)
 priceband_col = _find_column_ci(sales, SALES_PRICEBAND_COL)
+ticket_col = _find_column_ci(limechat, LIMECHAT_TICKET_COL)  # None if the sheet doesn't have this column
 
 missing_cols_warning = []
 if not sales_name_col and not sales_phone_col:
@@ -439,12 +507,14 @@ if not priceband_col:
     missing_cols_warning.append(f"Sales sheet: no '{SALES_PRICEBAND_COL}' column found — check SALES_PRICEBAND_COL.")
 if not category_col:
     missing_cols_warning.append(f"Sales sheet: no '{SALES_CATEGORY_COL}' column found — check SALES_CATEGORY_COL.")
+if team_targets.empty:
+    missing_cols_warning.append("Team Target tab: not found, empty, or missing Store/Agent/Target/Month-YY columns.")
 
 # ---- build unique customer keys ----
 sales["Customer_Key"] = build_customer_key(sales, sales_name_col, sales_phone_col)
 walkins["Customer_Key"] = build_customer_key(walkins, walkin_name_col, walkin_phone_col)
 
-# ---- New/Repeat tagging (MoM, per store, based on customer key) — overrides any sheet column ----
+# ---- New/Repeat tagging (MoM, per store, based on customer key) ----
 sales = tag_new_repeat(sales, SALES_STORE_COL, "Customer_Key", "Month_Sort")
 walkins = tag_new_repeat(walkins, WALKIN_STORE_COL, "Customer_Key", "Month_Sort")
 
@@ -453,23 +523,21 @@ walkins = tag_sales_walkin_conversion(
     walkins, sales, "Customer_Key", "Customer_Key", WALKIN_DATE_COL, SALES_DATE_COL
 )
 
-# ---- associate columns (auto-detect) ----
+# ---- LimeChat → Sales conversion: LimeChat Phone Number vs Sales Mobile Number, same month ----
+limechat = tag_limechat_conversion(limechat, sales, sales_phone_col)
+
 sales_assoc_candidates = [c for c in sales.columns if any(k in str(c).lower() for k in ASSOC_KEYWORDS)]
 walkin_assoc_candidates = [c for c in walkins.columns if any(k in str(c).lower() for k in ASSOC_KEYWORDS)]
 
 # =====================================================
-# SIDEBAR — FILTERS (Store multi / Month-YY multi / Date multi, cascading)
+# SIDEBAR — FILTERS
 # =====================================================
 st.sidebar.markdown("## 💎 Tyaani Analytics")
 st.sidebar.caption("Filter the dashboard")
 
 if missing_cols_warning:
     for w in missing_cols_warning:
-        st.sidebar.warning(
-            f"⚠️ {w} New/Repeat, Unique Customer and Conversion metrics will be unreliable "
-            "until SALES_NAME_COL/SALES_PHONE_COL (or the Walk-in equivalents) at the top "
-            "of the script are set to your real column names."
-        )
+        st.sidebar.warning(f"⚠️ {w}")
 
 all_stores = sorted(sales[SALES_STORE_COL].dropna().unique().tolist())
 selected_stores = st.sidebar.multiselect("Store", all_stores, default=[], placeholder="All stores")
@@ -507,6 +575,12 @@ if priceband_col:
 else:
     selected_pricebands = []
 
+all_limechat_inboxes = sorted(limechat[LIMECHAT_INBOX_COL].dropna().unique().tolist())
+selected_limechat_inboxes = st.sidebar.multiselect("LimeChat Inbox", all_limechat_inboxes, default=[], placeholder="All Inboxes")
+
+all_limechat_agents = sorted(limechat[LIMECHAT_AGENT_COL].dropna().unique().tolist())
+selected_limechat_agents = st.sidebar.multiselect("LimeChat Agent", all_limechat_agents, default=[], placeholder="All Agents")
+
 store_display = ", ".join(selected_stores) if selected_stores else "All"
 month_display = ", ".join(selected_months) if selected_months else "All"
 date_display = ", ".join(selected_dates) if selected_dates else "All"
@@ -518,6 +592,7 @@ st.sidebar.caption(f"Sales rows loaded: {len(sales):,}")
 st.sidebar.caption(f"Walk-in rows loaded: {len(walkins):,}")
 st.sidebar.caption(f"Target rows loaded: {len(targets):,}")
 st.sidebar.caption(f"Team Target rows loaded: {len(team_targets):,}")
+st.sidebar.caption(f"LimeChat rows loaded: {len(limechat):,}")
 st.sidebar.caption("Data auto-refreshes every 5 min.")
 if st.sidebar.button("🔄 Refresh data now"):
     st.cache_data.clear()
@@ -542,34 +617,21 @@ def apply_filters(df, store_col, date_str_col="Date_Str"):
 filtered_sales = apply_filters(sales, SALES_STORE_COL)
 filtered_walkins = apply_filters(walkins, WALKIN_STORE_COL)
 
-# =====================================================
-# HEADER
-# =====================================================
-st.markdown(
-    f"""
-    <div class="exec-header">
-        <h1>💎 Tyaani Jewellery — Executive Dashboard</h1>
-        <p>Performance overview across stores, months & sales associates</p>
-        <div class="filter-pills">
-            <span class="filter-pill">Store: <b>{store_display}</b></span>
-            <span class="filter-pill">Month: <b>{month_display}</b></span>
-            <span class="filter-pill">Date: <b>{date_display}</b></span>
-            <span class="filter-pill">Collection: <b>{collection_display}</b></span>
-            <span class="filter-pill">Price Band: <b>{priceband_display}</b></span>
-        </div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+# ---- LimeChat filters ----
+filtered_limechat = limechat.copy()
+if selected_months:
+    filtered_limechat = filtered_limechat[filtered_limechat["Month_Label"].isin(selected_months)]
+if selected_dates:
+    filtered_limechat = filtered_limechat[filtered_limechat["Date_Str"].isin(selected_dates)]
+if selected_limechat_inboxes:
+    filtered_limechat = filtered_limechat[filtered_limechat[LIMECHAT_INBOX_COL].isin(selected_limechat_inboxes)]
+if selected_limechat_agents:
+    filtered_limechat = filtered_limechat[filtered_limechat[LIMECHAT_AGENT_COL].isin(selected_limechat_agents)]
 
 # =====================================================
-# GROUP-LEVEL METRIC BUILDERS (reused everywhere: global cards, store
-# tables, associate tables, YoY comparison)
+# GROUP-LEVEL METRIC BUILDERS
 # =====================================================
 def sales_metrics_by(df, group_col, targets_df=None, target_group_col=None):
-    """Target, Revenue, Ach%, Shortfall, Unique Invoice, ATV, UPT,
-    Unique Customer, New/Repeat counts & %, Revenue split by New/Repeat —
-    grouped by `group_col` (e.g. Store or Associate)."""
     if df.empty or group_col not in df.columns:
         return pd.DataFrame()
 
@@ -617,7 +679,6 @@ def sales_metrics_by(df, group_col, targets_df=None, target_group_col=None):
 
 
 def walkin_metrics_by(df, group_col):
-    """Total Unique Walkin, New Walkin, Repeat Walkin, New/Repeat % — grouped by group_col."""
     if df.empty or group_col not in df.columns:
         return pd.DataFrame()
     tot = df.groupby(group_col)["Customer_Key"].nunique().rename("Total_Unique_Walkin").reset_index()
@@ -689,10 +750,6 @@ def format_walkin_table(df, group_col):
 
 
 def product_metrics_by(df, group_col):
-    """Revenue, Unique Invoice, ATV, UPT, Qty Sold, Unique Customer, New/Repeat
-    counts & %, and Revenue Share % — grouped by a product attribute
-    (Product Category / Collection / Price band). No Target/Ach%/Shortfall
-    here since targets are set at Store level, not product level."""
     if df.empty or not group_col or group_col not in df.columns:
         return pd.DataFrame()
 
@@ -749,11 +806,24 @@ def format_product_table(df, group_col):
     return d[cols_order]
 
 
+def crosstab_counts(df, group_col, split_col, id_col, new_label="New", repeat_label="Repeat"):
+    """Fast, correct replacement for the old per-row lambda pattern: one
+    vectorized groupby+unstack instead of scanning the whole frame per group."""
+    if df.empty or group_col not in df.columns:
+        return pd.DataFrame(columns=[group_col, new_label, repeat_label])
+    ct = df.dropna(subset=[split_col]).groupby([group_col, split_col])[id_col].nunique().unstack(fill_value=0)
+    for c in [new_label, repeat_label]:
+        if c not in ct.columns:
+            ct[c] = 0
+    return ct.reset_index()[[group_col, new_label, repeat_label]]
+
+
 # =====================================================
 # GLOBAL KPI CALCULATIONS (current filter scope)
 # =====================================================
 relevant_months = sorted(filtered_sales["Month_Label"].dropna().unique().tolist()) or all_months
 target_scope = targets.copy()
+
 if selected_stores:
     target_scope = target_scope[target_scope["Store"].isin(selected_stores)]
 if relevant_months:
@@ -768,7 +838,7 @@ upt = filtered_sales[SALES_QTY_COL].sum() / total_invoices if total_invoices > 0
 if period_target > 0:
     achievement_display = fmt_pct(net_sales / period_target * 100)
     surplus = net_sales - period_target
-    shortfall_display = f"{'+' if surplus >= 0 else '-'}₹{abs(surplus):,.0f}"
+    shortfall_display = f"{'+₹' if surplus >= 0 else '-₹'}{abs(surplus):,.0f}"
     target_display = fmt_money(period_target)
 else:
     achievement_display, shortfall_display, target_display = "N/A", "N/A", "N/A"
@@ -794,7 +864,6 @@ walkin_tot_nr = walkin_new + walkin_repeat
 walkin_new_pct = walkin_new / walkin_tot_nr * 100 if walkin_tot_nr > 0 else 0
 walkin_repeat_pct = walkin_repeat / walkin_tot_nr * 100 if walkin_tot_nr > 0 else 0
 
-# YoY (only meaningful when exactly one month is selected)
 yoy_display = "N/A"
 if len(selected_months) == 1:
     cur = pd.to_datetime(selected_months[0], format="%b-%y")
@@ -804,6 +873,49 @@ if len(selected_months) == 1:
     last_year_sales = prior_df[SALES_NET_COL].sum()
     if last_year_sales > 0:
         yoy_display = f"{(net_sales - last_year_sales) / last_year_sales * 100:+.1f}%"
+
+# ---- LimeChat KPIs ----
+limechat_valid = filtered_limechat[filtered_limechat["Customer_Key"] != ""]
+limechat_unique_customers = limechat_valid["Customer_Key"].nunique()
+limechat_new_customers = limechat_valid[limechat_valid["New/Repeat"] == "New"]["Customer_Key"].nunique()
+limechat_repeat_customers = limechat_valid[limechat_valid["New/Repeat"] == "Repeat"]["Customer_Key"].nunique()
+limechat_total_nr = limechat_new_customers + limechat_repeat_customers
+limechat_new_pct = limechat_new_customers / limechat_total_nr * 100 if limechat_total_nr > 0 else 0
+limechat_repeat_pct = limechat_repeat_customers / limechat_total_nr * 100 if limechat_total_nr > 0 else 0
+
+limechat_valid_phone_count = filtered_limechat[filtered_limechat["Phone_Status"] == "Valid"]["Customer_Key"].nunique()
+limechat_invalid_phone_count = filtered_limechat[filtered_limechat["Phone_Status"] == "Invalid"].shape[0]
+
+limechat_non_junk = filtered_limechat[~filtered_limechat["Is_Junk"]]
+limechat_interacted = limechat_non_junk[limechat_non_junk["Interaction_Status"] == "Interacted"]["Customer_Key"].nunique()
+limechat_non_interacted = limechat_non_junk[limechat_non_junk["Interaction_Status"] == "Non Interacted"]["Customer_Key"].nunique()
+limechat_interaction_total = limechat_interacted + limechat_non_interacted
+limechat_interacted_pct = limechat_interacted / limechat_interaction_total * 100 if limechat_interaction_total > 0 else 0
+limechat_non_interacted_pct = limechat_non_interacted / limechat_interaction_total * 100 if limechat_interaction_total > 0 else 0
+
+# ---- LimeChat → Sales conversion (by phone number, same month) ----
+limechat_converted = filtered_limechat[filtered_limechat["Sales_Conversion"] == "Converted"]["Customer_Key"].nunique()
+limechat_conversion_pct = limechat_converted / limechat_unique_customers * 100 if limechat_unique_customers > 0 else 0
+
+# =====================================================
+# HEADER
+# =====================================================
+st.markdown(
+    f"""
+    <div class="exec-header">
+        <h1>💎 Tyaani Jewellery — Executive Dashboard</h1>
+        <p>Performance overview across stores, months & sales associates</p>
+        <div class="filter-pills">
+            <span class="filter-pill">Store: <b>{store_display}</b></span>
+            <span class="filter-pill">Month: <b>{month_display}</b></span>
+            <span class="filter-pill">Date: <b>{date_display}</b></span>
+            <span class="filter-pill">Collection: <b>{collection_display}</b></span>
+            <span class="filter-pill">Price Band: <b>{priceband_display}</b></span>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 # =====================================================
 # KPI CARDS
@@ -850,11 +962,23 @@ st.markdown("---")
 # =====================================================
 # TABS
 # =====================================================
-tab_trends, tab_sales, tab_walkin, tab_product, tab_yoy, tab_raw = st.tabs(
-    ["📈 Trends Charts", "🏬 Sales Tab", "🚶 Walkin Tab", "🏷️ Product Mix", "📆 Same Month Vs Last Yr", "📄 Raw Data"]
+tab_trends, tab_sales, tab_walkin, tab_limechat, tab_product, tab_yoy, tab_raw = st.tabs(
+    [
+        "📈 Trends Charts",
+        "🏬 Sales Tab",
+        "🚶 Walkin Tab",
+        "💬 LimeChat Tab",
+        "🏷️ Product Mix",
+        "📆 Same Month Vs Last Yr",
+        "📄 Raw Data"
+    ]
 )
 
 # ---------------- TRENDS CHARTS ----------------
+# Kept lean: only the two core trend lines. The "New vs Repeat" 3-key
+# groupby was dropped per request — it's the heaviest of the three and
+# least essential; New/Repeat splits are already available store-wise
+# and associate-wise in the Sales/Walkin tabs.
 with tab_trends:
     trend_sales = sales[sales[SALES_STORE_COL].isin(selected_stores)] if selected_stores else sales
     trend_walk = walkins[walkins[WALKIN_STORE_COL].isin(selected_stores)] if selected_stores else walkins
@@ -879,21 +1003,6 @@ with tab_trends:
         st.plotly_chart(style_fig(fig2, show_legend=False, category_count=len(m_walk)), use_container_width=True)
     else:
         st.info("No walk-in data for this selection.")
-
-    st.markdown('<div class="section-kicker">New vs Repeat Trend (Sales Customers)</div>', unsafe_allow_html=True)
-    m_nr = (
-        trend_sales.dropna(subset=["New/Repeat"])
-        .groupby(["Month_Sort", "Month_Label", "New/Repeat"])["Customer_Key"]
-        .nunique()
-        .reset_index(name="Customers")
-        .sort_values("Month_Sort")
-    )
-    if not m_nr.empty:
-        fig3 = px.bar(m_nr, x="Month_Label", y="Customers", color="New/Repeat", barmode="group",
-                       color_discrete_map={"New": NAVY, "Repeat": GOLD})
-        st.plotly_chart(style_fig(fig3, show_legend=True, category_count=m_nr["Month_Label"].nunique()), use_container_width=True)
-    else:
-        st.info("No New/Repeat data for this selection.")
 
 # ---------------- SALES TAB ----------------
 with tab_sales:
@@ -952,26 +1061,108 @@ with tab_walkin:
     else:
         w_assoc_col = (
             walkin_assoc_candidates[0] if len(walkin_assoc_candidates) == 1
-            else st.selectbox("Walk-in Associate column", walkin_assoc_candidates, key="walk_assoc_tab_pick")
+            else st.selectbox("Walk-in Associate column", walkin_assoc_candidates, key="walk_assoc_pick_2")
         )
         w_assoc_table = walkin_metrics_by(filtered_walkins.dropna(subset=[w_assoc_col]), w_assoc_col)
-        if w_assoc_table.empty:
-            st.info("No associate-level walk-in data for this selection.")
+        if not w_assoc_table.empty:
+            w_assoc_table = w_assoc_table.sort_values("Total_Unique_Walkin", ascending=False)
+            st.dataframe(format_walkin_table(w_assoc_table, w_assoc_col), use_container_width=True, hide_index=True)
         else:
-            st.dataframe(format_walkin_table(w_assoc_table.sort_values("Total_Unique_Walkin", ascending=False), w_assoc_col),
-                         use_container_width=True, hide_index=True)
+            st.info("No associate-level walk-in data for this selection.")
 
-# ---------------- PRODUCT MIX (Category / Collection / Price band) ----------------
+# ---------------- LIMECHAT TAB ----------------
+with tab_limechat:
+    st.markdown('<div class="section-kicker">LimeChat Key Metrics</div>', unsafe_allow_html=True)
+    lc1 = st.columns(4)
+    render_kpi(lc1[0], "👤", "Unique Customers", f"{limechat_unique_customers:,}")
+    render_kpi(lc1[1], "🆕", "New Customers", f"{limechat_new_customers:,}")
+    render_kpi(lc1[2], "🔁", "Repeat Customers", f"{limechat_repeat_customers:,}")
+    render_kpi(lc1[3], "📊", "New %", fmt_pct(limechat_new_pct))
+
+    lc2 = st.columns(4)
+    render_kpi(lc2[0], "📞", "Valid Phone #s", f"{limechat_valid_phone_count:,}")
+    render_kpi(lc2[1], "🚫", "Invalid Phone #s", f"{limechat_invalid_phone_count:,}")
+    render_kpi(lc2[2], "💬", "Interacted %", fmt_pct(limechat_interacted_pct))
+    render_kpi(lc2[3], "👀", "Non Interacted %", fmt_pct(limechat_non_interacted_pct))
+
+    lc3 = st.columns(2)
+    render_kpi(lc3[0], "🛍️", "Converted to Sale", f"{limechat_converted:,}")
+    render_kpi(lc3[1], "🎯", "Conversion %", fmt_pct(limechat_conversion_pct))
+    st.caption("Conversion = LimeChat Phone Number matched against Sales Mobile Number, same month.")
+
+    st.markdown("---")
+
+    # ---- Inbox-wise performance (vectorized — replaces the old per-group lambda scan) ----
+    st.markdown('<div class="section-kicker">Inbox Wise Performance</div>', unsafe_allow_html=True)
+    inbox_customers = filtered_limechat.groupby(LIMECHAT_INBOX_COL)["Customer_Key"].nunique().rename("Unique_Customers")
+    inbox_nr = crosstab_counts(filtered_limechat, LIMECHAT_INBOX_COL, "New/Repeat", "Customer_Key")
+    inbox_summary = inbox_nr.merge(inbox_customers, on=LIMECHAT_INBOX_COL, how="left")
+    inbox_summary = inbox_summary.rename(columns={"New": "New_Customers", "Repeat": "Repeat_Customers"})
+    tot = inbox_summary["New_Customers"] + inbox_summary["Repeat_Customers"]
+    inbox_summary["New %"] = (inbox_summary["New_Customers"] / tot.replace(0, np.nan) * 100).round(1)
+    inbox_summary["Repeat %"] = (inbox_summary["Repeat_Customers"] / tot.replace(0, np.nan) * 100).round(1)
+    if ticket_col:
+        tix = filtered_limechat.groupby(LIMECHAT_INBOX_COL)[ticket_col].nunique().rename("Total_Tickets")
+        inbox_summary = inbox_summary.merge(tix, on=LIMECHAT_INBOX_COL, how="left")
+    st.dataframe(inbox_summary.sort_values("Unique_Customers", ascending=False), use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+
+    # ---- Agent-wise performance (vectorized) ----
+    st.markdown('<div class="section-kicker">Agent Wise Performance</div>', unsafe_allow_html=True)
+    agent_customers = filtered_limechat.groupby(LIMECHAT_AGENT_COL)["Customer_Key"].nunique().rename("Unique_Customers")
+    agent_interaction = crosstab_counts(filtered_limechat, LIMECHAT_AGENT_COL, "Interaction_Status", "Customer_Key",
+                                         new_label="Interacted", repeat_label="Non Interacted")
+    agent_summary = agent_interaction.merge(agent_customers, on=LIMECHAT_AGENT_COL, how="left")
+    agent_tot = agent_summary["Interacted"] + agent_summary["Non Interacted"]
+    agent_summary["Interacted %"] = (agent_summary["Interacted"] / agent_tot.replace(0, np.nan) * 100).round(1)
+    agent_summary["Non Interacted %"] = (agent_summary["Non Interacted"] / agent_tot.replace(0, np.nan) * 100).round(1)
+    if ticket_col:
+        atix = filtered_limechat.groupby(LIMECHAT_AGENT_COL)[ticket_col].nunique().rename("Total_Tickets")
+        agent_summary = agent_summary.merge(atix, on=LIMECHAT_AGENT_COL, how="left")
+    st.dataframe(agent_summary.sort_values("Unique_Customers", ascending=False), use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+
+    # ---- Tag analysis ----
+    st.markdown('<div class="section-kicker">Lead Quality & Tag Analysis</div>', unsafe_allow_html=True)
+    tag_columns = [LIMECHAT_MAIN_TAG_COL, LIMECHAT_L1_COL, LIMECHAT_L2_COL, LIMECHAT_L3_COL, LIMECHAT_LEAD_QUALITY_COL]
+    for tag_col in tag_columns:
+        if tag_col not in filtered_limechat.columns:
+            continue
+        st.markdown(f"##### {tag_col}")
+        agg_kwargs = {"Unique_Customers": ("Customer_Key", "nunique")}
+        if ticket_col:
+            agg_kwargs["Total_Tickets"] = (ticket_col, "nunique")
+        tag_summary = filtered_limechat.groupby(tag_col).agg(**agg_kwargs).reset_index().sort_values("Unique_Customers", ascending=False)
+        st.dataframe(tag_summary, use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+
+    # ---- Interaction summary (junk excluded) ----
+    st.markdown('<div class="section-kicker">Interaction Summary — Junk Excluded</div>', unsafe_allow_html=True)
+    interaction_summary = limechat_non_junk.groupby("Interaction_Status")["Customer_Key"].nunique().rename("Unique_Customers").reset_index()
+    interaction_summary["Percentage"] = (interaction_summary["Unique_Customers"] / interaction_summary["Unique_Customers"].sum() * 100).round(1)
+    st.dataframe(interaction_summary, use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+    st.markdown('<div class="section-kicker">LimeChat Raw Data</div>', unsafe_allow_html=True)
+    st.dataframe(filtered_limechat, use_container_width=True, hide_index=True)
+    st.download_button(
+        "⬇️ Download Filtered LimeChat CSV",
+        data=filtered_limechat.to_csv(index=False).encode("utf-8"),
+        file_name="filtered_limechat.csv",
+        mime="text/csv"
+    )
+
+# ---------------- PRODUCT MIX ----------------
 with tab_product:
     st.caption("Respects the Store, Month, Date, Collection and Price Band filters in the sidebar.")
 
     def _render_product_section(title, col):
         st.markdown(f'<div class="section-kicker">{title}</div>', unsafe_allow_html=True)
         if not col:
-            st.warning(
-                f"Couldn't find this column in the Sales sheet. Available columns: "
-                + ", ".join(map(str, sales.columns))
-            )
+            st.warning("Couldn't find this column in the Sales sheet. Available columns: " + ", ".join(map(str, sales.columns)))
             return
         tbl = product_metrics_by(filtered_sales, col)
         if tbl.empty:
