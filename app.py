@@ -411,6 +411,45 @@ def build_customer_key(df, name_col, phone_col):
     return key
 
 
+def build_conversion_key(df, store_col, month_col, name_col, phone_col):
+    """Sales Conversion key = StoreName|Month-YY|Number (falls back to Name if Number missing)."""
+    store = df[store_col].astype(str).str.strip().str.upper()
+    month = df[month_col].astype(str).str.strip()
+    if phone_col and phone_col in df.columns:
+        number = df[phone_col].apply(_normalize_phone)
+    else:
+        number = pd.Series([""] * len(df), index=df.index)
+    if name_col and name_col in df.columns:
+        name = df[name_col].apply(_normalize_name)
+    else:
+        name = pd.Series([""] * len(df), index=df.index)
+    identifier = number.where(number != "", name)
+    key = store + "|" + month + "|" + identifier
+    key = key.where(identifier != "", None)
+    return key
+
+
+def conversion_metrics_by(walkins_df, sales_df, group_col):
+    """Sales Conversion Count = unique Walk-in Conversion_Keys also found in Sales Conversion_Keys.
+    Sales Conversion % = Sales Conversion Count / Total Unique Walkin."""
+    if walkins_df.empty or group_col not in walkins_df.columns:
+        return pd.DataFrame(columns=[group_col, "Total_Unique_Walkin", "Sales_Conversion_Count", "Conversion %"])
+    sales_keys = set(sales_df["Conversion_Key"].dropna()) if not sales_df.empty else set()
+    w = walkins_df.copy()
+    w["_Matched"] = w["Conversion_Key"].isin(sales_keys)
+
+    total = w.groupby(group_col)["Customer_Key"].nunique().rename("Total_Unique_Walkin")
+    matched = w[w["_Matched"]].groupby(group_col)["Conversion_Key"].nunique().rename("Sales_Conversion_Count")
+    out = pd.concat([total, matched], axis=1).reset_index()
+    out["Total_Unique_Walkin"] = out["Total_Unique_Walkin"].fillna(0)
+    out["Sales_Conversion_Count"] = out["Sales_Conversion_Count"].fillna(0)
+    out["Conversion %"] = out.apply(
+        lambda r: round(r["Sales_Conversion_Count"] / r["Total_Unique_Walkin"] * 100, 1) if r["Total_Unique_Walkin"] > 0 else None,
+        axis=1,
+    )
+    return out
+
+
 def tag_new_repeat(df, store_col, key_col, month_sort_col):
     df = df.copy()
     valid_mask = df[key_col].notna()
@@ -512,6 +551,10 @@ if team_targets.empty:
 # ---- build unique customer keys ----
 sales["Customer_Key"] = build_customer_key(sales, sales_name_col, sales_phone_col)
 walkins["Customer_Key"] = build_customer_key(walkins, walkin_name_col, walkin_phone_col)
+
+# ---- Sales Conversion key: StoreName|Month-YY|Number (falls back to Name if Number missing) ----
+sales["Conversion_Key"] = build_conversion_key(sales, SALES_STORE_COL, "Month_Label", sales_name_col, sales_phone_col)
+walkins["Conversion_Key"] = build_conversion_key(walkins, WALKIN_STORE_COL, "Month_Label", walkin_name_col, walkin_phone_col)
 
 # ---- New/Repeat tagging (MoM, per store, based on customer key) ----
 sales = tag_new_repeat(sales, SALES_STORE_COL, "Customer_Key", "Month_Sort")
@@ -706,10 +749,15 @@ def build_store_table(sales_df, walkins_df, targets_df):
     else:
         s["Total_Unique_Walkin"] = 0
     s["Total_Unique_Walkin"] = s["Total_Unique_Walkin"].fillna(0)
-    s["Conversion %"] = s.apply(
-        lambda r: round(r["Unique_Customer"] / r["Total_Unique_Walkin"] * 100, 1) if r["Total_Unique_Walkin"] > 0 else None,
-        axis=1,
-    )
+
+    # ---- Conversion %: StoreName|Month-YY|Number-or-Name key matched between Walk-in and Sales ----
+    conv = conversion_metrics_by(walkins_df, sales_df, WALKIN_STORE_COL)
+    if not conv.empty:
+        conv = conv.rename(columns={WALKIN_STORE_COL: SALES_STORE_COL})[[SALES_STORE_COL, "Conversion %"]]
+        s = s.drop(columns=["Conversion %"], errors="ignore").merge(conv, on=SALES_STORE_COL, how="left")
+    else:
+        s["Conversion %"] = None
+
     return s.sort_values("Revenue", ascending=False)
 
 
@@ -844,7 +892,13 @@ else:
 
 unique_customers = filtered_sales["Customer_Key"].nunique()
 total_walkins_kpi = filtered_walkins["Customer_Key"].nunique()
-conversion_pct = unique_customers / total_walkins_kpi * 100 if total_walkins_kpi > 0 else 0
+
+# ---- Sales Conversion Count/%: StoreName|Month-YY|Number-or-Name key matched between Walk-in and Sales ----
+_sales_conversion_keys_kpi = set(filtered_sales["Conversion_Key"].dropna())
+sales_conversion_count = filtered_walkins[
+    filtered_walkins["Conversion_Key"].isin(_sales_conversion_keys_kpi)
+]["Conversion_Key"].nunique()
+conversion_pct = sales_conversion_count / total_walkins_kpi * 100 if total_walkins_kpi > 0 else 0
 
 new_customer_count = filtered_sales[filtered_sales["New/Repeat"] == "New"]["Customer_Key"].nunique()
 repeat_customer_count = filtered_sales[filtered_sales["New/Repeat"] == "Repeat"]["Customer_Key"].nunique()
@@ -1037,8 +1091,18 @@ with tab_sales:
                 w_assoc = w_assoc.rename(columns={walk_assoc_col: assoc_col})[[assoc_col, "Total_Unique_Walkin"]] if not w_assoc.empty else pd.DataFrame(columns=[assoc_col, "Total_Unique_Walkin"])
                 assoc_table = assoc_table.merge(w_assoc, on=assoc_col, how="left")
                 assoc_table["Total_Unique_Walkin"] = assoc_table["Total_Unique_Walkin"].fillna(0)
-                assoc_table["Conversion %"] = assoc_table.apply(
-                    lambda r: round(r["Unique_Customer"] / r["Total_Unique_Walkin"] * 100, 1) if r["Total_Unique_Walkin"] > 0 else None, axis=1)
+
+                # ---- Conversion %: StoreName|Month-YY|Number-or-Name key matched between Walk-in and Sales ----
+                conv_assoc = conversion_metrics_by(
+                    filtered_walkins.dropna(subset=[walk_assoc_col]), filtered_sales, walk_assoc_col
+                )
+                if not conv_assoc.empty:
+                    conv_assoc = conv_assoc.rename(columns={walk_assoc_col: assoc_col})[[assoc_col, "Conversion %"]]
+                    assoc_table = assoc_table.drop(columns=["Conversion %"], errors="ignore").merge(
+                        conv_assoc, on=assoc_col, how="left"
+                    )
+                else:
+                    assoc_table["Conversion %"] = None
             assoc_table = assoc_table.sort_values("Revenue", ascending=False)
             st.dataframe(format_sales_table(assoc_table, assoc_col), use_container_width=True, hide_index=True)
         else:
