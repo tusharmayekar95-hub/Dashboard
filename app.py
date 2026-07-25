@@ -450,20 +450,21 @@ def conversion_metrics_by(walkins_df, sales_df, group_col):
     return out
 
 
-def tag_new_repeat(df, store_col, key_col, month_sort_col):
+def tag_new_repeat(df, store_col, key_col, month_sort_col, group_by_store=True):
     df = df.copy()
     valid_mask = df[key_col].notna()
     if not valid_mask.any():
         df["New/Repeat"] = None
         return df
+    group_cols = [store_col, key_col] if group_by_store else [key_col]
     first_month = (
         df[valid_mask]
-        .groupby([store_col, key_col])[month_sort_col]
+        .groupby(group_cols)[month_sort_col]
         .min()
         .rename("First_Month")
         .reset_index()
     )
-    df = df.merge(first_month, on=[store_col, key_col], how="left")
+    df = df.merge(first_month, on=group_cols, how="left")
     df["New/Repeat"] = None
     is_new = valid_mask & (df[month_sort_col] == df["First_Month"])
     is_repeat = valid_mask & (df[month_sort_col] > df["First_Month"])
@@ -556,9 +557,12 @@ walkins["Customer_Key"] = build_customer_key(walkins, walkin_name_col, walkin_ph
 sales["Conversion_Key"] = build_conversion_key(sales, SALES_STORE_COL, "Month_Label", sales_name_col, sales_phone_col)
 walkins["Conversion_Key"] = build_conversion_key(walkins, WALKIN_STORE_COL, "Month_Label", walkin_name_col, walkin_phone_col)
 
-# ---- New/Repeat tagging (MoM, per store, based on customer key) ----
-sales = tag_new_repeat(sales, SALES_STORE_COL, "Customer_Key", "Month_Sort")
-walkins = tag_new_repeat(walkins, WALKIN_STORE_COL, "Customer_Key", "Month_Sort")
+# ---- New/Repeat tagging ----
+# Sales: New/Repeat is per CUSTOMER + MONTH only (store-agnostic) —
+#   same customer, same month (any date) = New; same customer, later month = Repeat.
+sales = tag_new_repeat(sales, SALES_STORE_COL, "Customer_Key", "Month_Sort", group_by_store=False)
+# Walk-in: same logic — New/Repeat is per CUSTOMER + MONTH only (store-agnostic)
+walkins = tag_new_repeat(walkins, WALKIN_STORE_COL, "Customer_Key", "Month_Sort", group_by_store=False)
 
 # ---- Sales_Walkin Tag: walk-in converted if matched in Sales same day ----
 walkins = tag_sales_walkin_conversion(
