@@ -6,7 +6,6 @@ import plotly.express as px
 import gspread
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe
-from pathlib import Path
 
 # =====================================================
 # PAGE CONFIGURATION
@@ -41,8 +40,8 @@ SALES_PRICEBAND_COL = "Price band"
 # =====================================================
 # LIMECHAT CONFIGURATION
 # =====================================================
-BASE_DIR = Path(__file__).parent
-LIMECHAT_FILE = BASE_DIR / "Data" / "Lime Chat.xlsx"
+LIMECHAT_SHEET_ID = "1Io2bxAJxWhm2KhdpQSrHE8WFAefbjrlmrIOlhwIGfc8"
+LIMECHAT_GID = "0"
 
 LIMECHAT_DATE_COL = "Date"
 LIMECHAT_PHONE_COL = "Phone Number"
@@ -274,16 +273,17 @@ def load_data():
     sales_ss = client.open_by_key(SALES_SHEET_ID)
     walkins_ss = client.open_by_key(WALKINS_SHEET_ID)
     targets_ss = client.open_by_key(TARGETS_SHEET_ID)
+    limechat_ss = client.open_by_key(LIMECHAT_SHEET_ID)
 
     sales_ws = _get_worksheet(sales_ss, SALES_GID)
     walkins_ws = _get_worksheet(walkins_ss, WALKINS_GID)
     targets_ws = _get_worksheet(targets_ss, TARGETS_GID)
+    limechat_ws = _get_worksheet(limechat_ss, LIMECHAT_GID)
 
     sales = get_as_dataframe(sales_ws, evaluate_formulas=True)
     walkins = get_as_dataframe(walkins_ws, evaluate_formulas=True)
     targets_raw = get_as_dataframe(targets_ws, evaluate_formulas=True)
-
-    limechat = pd.read_excel(LIMECHAT_FILE, engine="openpyxl")
+    limechat = get_as_dataframe(limechat_ws, evaluate_formulas=True)
 
     sales = sales.dropna(how="all").dropna(axis=1, how="all")
     walkins = walkins.dropna(how="all").dropna(axis=1, how="all")
@@ -479,9 +479,8 @@ except Exception as e:
         f"Could not load data: {e}\n\n"
         "Check that:\n"
         "1. `.streamlit/secrets.toml` has a `[gcp_service_account]` section.\n"
-        "2. All sheets are shared with the service account's email.\n"
-        "3. `Data/Lime Chat.xlsx` exists in the repo (this one is a local file, not a Google Sheet).\n"
-        "4. The sheet IDs / gid values at the top of the file are correct."
+        "2. All sheets (Sales, Walk-ins, Targets, LimeChat) are shared with the service account's email.\n"
+        "3. The sheet IDs / gid values at the top of the file are correct."
     )
     st.stop()
 
