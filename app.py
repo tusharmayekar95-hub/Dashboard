@@ -411,6 +411,25 @@ def build_customer_key(df, name_col, phone_col):
     return key
 
 
+def build_new_repeat_key(df, store_col, name_col, phone_col):
+    """Key used ONLY for New/Repeat tagging: Number if present (global, cross-store),
+    else Store|Name (store-scoped fallback) — matches Excel's Helper-column logic."""
+    store = df[store_col].astype(str).str.strip().str.upper()
+    if phone_col and phone_col in df.columns:
+        phone = df[phone_col].apply(_normalize_phone)
+    else:
+        phone = pd.Series([""] * len(df), index=df.index)
+    if name_col and name_col in df.columns:
+        name = df[name_col].apply(_normalize_name)
+    else:
+        name = pd.Series([""] * len(df), index=df.index)
+
+    key = phone.where(phone != "", store + "|" + name)
+    has_identifier = (phone != "") | (name != "")
+    key = key.where(has_identifier, None)
+    return key
+
+
 def build_conversion_key(df, store_col, month_col, name_col, phone_col):
     """Sales Conversion key = StoreName|Month-YY|Number (falls back to Name if Number missing)."""
     store = df[store_col].astype(str).str.strip().str.upper()
@@ -551,11 +570,15 @@ def prepare_data():
     sales["Conversion_Key"] = build_conversion_key(sales, SALES_STORE_COL, "Month_Label", sales_name_col, sales_phone_col)
     walkins["Conversion_Key"] = build_conversion_key(walkins, WALKIN_STORE_COL, "Month_Label", walkin_name_col, walkin_phone_col)
 
+    # ---- New/Repeat key: Number if present (global, cross-store), else Store|Name (store-scoped) ----
+    sales["NewRepeat_Key"] = build_new_repeat_key(sales, SALES_STORE_COL, sales_name_col, sales_phone_col)
+    walkins["NewRepeat_Key"] = build_new_repeat_key(walkins, WALKIN_STORE_COL, walkin_name_col, walkin_phone_col)
+
     # ---- New/Repeat tagging ----
-    # Both Sales & Walk-in: New/Repeat is per CUSTOMER + MONTH only (store-agnostic) —
-    #   same customer, same month (any date) = New; same customer, later month = Repeat.
-    sales = tag_new_repeat(sales, SALES_STORE_COL, "Customer_Key", "Month_Sort", group_by_store=False)
-    walkins = tag_new_repeat(walkins, WALKIN_STORE_COL, "Customer_Key", "Month_Sort", group_by_store=False)
+    # Both Sales & Walk-in: New/Repeat is by MONTH only, using NewRepeat_Key
+    #   (phone matches are global across stores; name-only matches stay within the same store).
+    sales = tag_new_repeat(sales, SALES_STORE_COL, "NewRepeat_Key", "Month_Sort", group_by_store=False)
+    walkins = tag_new_repeat(walkins, WALKIN_STORE_COL, "NewRepeat_Key", "Month_Sort", group_by_store=False)
 
     # ---- Sales_Walkin Tag: walk-in converted if matched in Sales same day ----
     walkins = tag_sales_walkin_conversion(
