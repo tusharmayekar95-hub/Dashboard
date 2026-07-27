@@ -499,15 +499,15 @@ def tag_sales_walkin_conversion(walkins_df, sales_df, walk_key_col, sales_key_co
         wdf["Sales_Walkin_Tag"] = "Not Converted"
         return wdf
     sdf = sales_df[[sales_key_col, sales_date_col]].dropna(subset=[sales_key_col]).copy()
-    sdf["Month"] = sdf[sales_date_col].dt.strftime("%Y-%m")
-    sdf = sdf[[sales_key_col, "Month"]].drop_duplicates()
+    sdf["_ConvMonth"] = sdf[sales_date_col].dt.strftime("%Y-%m")
+    sdf = sdf[[sales_key_col, "_ConvMonth"]].drop_duplicates()
     sdf["_matched"] = "Converted"
     sdf = sdf.rename(columns={sales_key_col: walk_key_col})
 
-    wdf["Month"] = wdf[walk_date_col].dt.strftime("%Y-%m")
-    wdf = wdf.merge(sdf, on=[walk_key_col, "Month"], how="left")
+    wdf["_ConvMonth"] = wdf[walk_date_col].dt.strftime("%Y-%m")
+    wdf = wdf.merge(sdf, on=[walk_key_col, "_ConvMonth"], how="left")
     wdf["Sales_Walkin_Tag"] = wdf["_matched"].fillna("Not Converted")
-    wdf = wdf.drop(columns=["_matched", "Month"])
+    wdf = wdf.drop(columns=["_matched", "_ConvMonth"])
     return wdf
 
 
