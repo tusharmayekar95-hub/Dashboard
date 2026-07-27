@@ -1,4 +1,5 @@
 import re
+import time
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -6,6 +7,33 @@ import plotly.express as px
 import gspread
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe
+
+# =====================================================
+# RETRY HELPER — Google Sheets API occasionally returns transient
+# errors (429 rate-limited, 500/502/503/504 server-side) that have
+# nothing to do with credentials, sharing, or sheet IDs. Retrying
+# with a short backoff clears most of these without bothering the user.
+# =====================================================
+_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
+def _with_retry(fn, *args, retries=3, base_delay=1.5, **kwargs):
+    last_err = None
+    for attempt in range(retries + 1):
+        try:
+            return fn(*args, **kwargs)
+        except gspread.exceptions.APIError as e:
+            last_err = e
+            status = None
+            try:
+                status = e.response.status_code
+            except Exception:
+                pass
+            if status in _RETRYABLE_STATUS_CODES and attempt < retries:
+                time.sleep(base_delay * (2 ** attempt))
+                continue
+            raise
+    raise last_err
 
 # =====================================================
 # PAGE CONFIGURATION
@@ -270,20 +298,20 @@ def load_data():
 
     client = gspread.authorize(creds)
 
-    sales_ss = client.open_by_key(SALES_SHEET_ID)
-    walkins_ss = client.open_by_key(WALKINS_SHEET_ID)
-    targets_ss = client.open_by_key(TARGETS_SHEET_ID)
-    limechat_ss = client.open_by_key(LIMECHAT_SHEET_ID)
+    sales_ss = _with_retry(client.open_by_key, SALES_SHEET_ID)
+    walkins_ss = _with_retry(client.open_by_key, WALKINS_SHEET_ID)
+    targets_ss = _with_retry(client.open_by_key, TARGETS_SHEET_ID)
+    limechat_ss = _with_retry(client.open_by_key, LIMECHAT_SHEET_ID)
 
     sales_ws = _get_worksheet(sales_ss, SALES_GID)
     walkins_ws = _get_worksheet(walkins_ss, WALKINS_GID)
     targets_ws = _get_worksheet(targets_ss, TARGETS_GID)
     limechat_ws = _get_worksheet(limechat_ss, LIMECHAT_GID)
 
-    sales = get_as_dataframe(sales_ws, evaluate_formulas=True)
-    walkins = get_as_dataframe(walkins_ws, evaluate_formulas=True)
-    targets_raw = get_as_dataframe(targets_ws, evaluate_formulas=True)
-    limechat = get_as_dataframe(limechat_ws, evaluate_formulas=True)
+    sales = _with_retry(get_as_dataframe, sales_ws, evaluate_formulas=True)
+    walkins = _with_retry(get_as_dataframe, walkins_ws, evaluate_formulas=True)
+    targets_raw = _with_retry(get_as_dataframe, targets_ws, evaluate_formulas=True)
+    limechat = _with_retry(get_as_dataframe, limechat_ws, evaluate_formulas=True)
 
     sales = sales.dropna(how="all").dropna(axis=1, how="all")
     walkins = walkins.dropna(how="all").dropna(axis=1, how="all")
@@ -344,8 +372,8 @@ def load_data():
     # ---- Team Target lives on its OWN tab, not the Store Targets pivot ----
     team_targets = pd.DataFrame(columns=["Store", "Agent", "Month_Label", "Month_Sort", "Target"])
     try:
-        team_target_ws = targets_ss.worksheet("Team Target")
-        team_targets_raw = get_as_dataframe(team_target_ws, evaluate_formulas=True)
+        team_target_ws = _with_retry(targets_ss.worksheet, "Team Target")
+        team_targets_raw = _with_retry(get_as_dataframe, team_target_ws, evaluate_formulas=True)
         team_targets_raw = team_targets_raw.dropna(how="all").dropna(axis=1, how="all")
         cleaned = _clean_team_targets(team_targets_raw)
         if cleaned is not None:
@@ -592,6 +620,34 @@ try:
         category_col, collection_col, priceband_col, ticket_col,
         missing_cols_warning, sales_assoc_candidates, walkin_assoc_candidates,
     ) = prepare_data()
+except gspread.exceptions.APIError as e:
+    status = None
+    try:
+        status = e.response.status_code
+    except Exception:
+        pass
+    if status in _RETRYABLE_STATUS_CODES:
+        st.error(
+            f"Could not load data: Google Sheets API returned a temporary server-side "
+            f"error (HTTP {status}). This is NOT a problem with your secrets, sheet "
+            f"sharing, or sheet IDs — it's Google's API being briefly unavailable/rate-limited.\n\n"
+            "Already retried automatically a few times. Please wait a moment and rerun the app."
+        )
+    elif status == 403:
+        st.error(
+            f"Could not load data: {e}\n\n"
+            "HTTP 403 — permission denied. Check that the Sales, Walk-in, Targets, and "
+            "LimeChat sheets are all shared with your service account's email "
+            "(found in `.streamlit/secrets.toml` under `client_email`)."
+        )
+    elif status == 404:
+        st.error(
+            f"Could not load data: {e}\n\n"
+            "HTTP 404 — sheet not found. Check the sheet IDs / gid values at the top of the file."
+        )
+    else:
+        st.error(f"Could not load data: {e}")
+    st.stop()
 except Exception as e:
     st.error(
         f"Could not load data: {e}\n\n"
