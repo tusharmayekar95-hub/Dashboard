@@ -1036,30 +1036,6 @@ tab_trends, tab_sales, tab_walkin, tab_limechat, tab_product, tab_yoy, tab_raw =
 # groupby was dropped per request — it's the heaviest of the three and
 # least essential; New/Repeat splits are already available store-wise
 # and associate-wise in the Sales/Walkin tabs.
-with tab_trends:
-    trend_sales = sales[sales[SALES_STORE_COL].isin(selected_stores)] if selected_stores else sales
-    trend_walk = walkins[walkins[WALKIN_STORE_COL].isin(selected_stores)] if selected_stores else walkins
-
-    st.markdown('<div class="section-kicker">Sales Trend</div>', unsafe_allow_html=True)
-    m_sales = trend_sales.groupby(["Month_Sort", "Month_Label"], as_index=False)[SALES_NET_COL].sum().sort_values("Month_Sort")
-    m_sales["Net Sales (₹ Cr)"] = to_cr(m_sales[SALES_NET_COL])
-    if not m_sales.empty:
-        fig = px.area(m_sales, x="Month_Label", y="Net Sales (₹ Cr)", markers=True)
-        fig.update_traces(line_color=NAVY, fillcolor="rgba(92,26,43,0.10)", marker=dict(color=GOLD, size=7))
-        fig.update_layout(hovermode="x unified")
-        st.plotly_chart(style_fig(fig, show_legend=False, category_count=len(m_sales)), use_container_width=True)
-    else:
-        st.info("No sales data for this selection.")
-
-    st.markdown('<div class="section-kicker">Walkin Trend</div>', unsafe_allow_html=True)
-    m_walk = trend_walk.groupby(["Month_Sort", "Month_Label"], as_index=False)["Customer_Key"].nunique().sort_values("Month_Sort").rename(columns={"Customer_Key": "Unique Walk-ins"})
-    if not m_walk.empty:
-        fig2 = px.area(m_walk, x="Month_Label", y="Unique Walk-ins", markers=True)
-        fig2.update_traces(line_color=NAVY, fillcolor="rgba(92,26,43,0.10)", marker=dict(color=GOLD, size=7))
-        fig2.update_layout(hovermode="x unified")
-        st.plotly_chart(style_fig(fig2, show_legend=False, category_count=len(m_walk)), use_container_width=True)
-    else:
-        st.info("No walk-in data for this selection.")
 
 # ---------------- SALES TAB ----------------
 with tab_sales:
