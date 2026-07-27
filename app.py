@@ -411,23 +411,12 @@ def build_customer_key(df, name_col, phone_col):
     return key
 
 
-def build_new_repeat_key(df, store_col, name_col, phone_col):
-    """Key used ONLY for New/Repeat tagging: Number if present (global, cross-store),
-    else Store|Name (store-scoped fallback) — matches Excel's Helper-column logic."""
-    store = df[store_col].astype(str).str.strip().str.upper()
-    if phone_col and phone_col in df.columns:
-        phone = df[phone_col].apply(_normalize_phone)
-    else:
-        phone = pd.Series([""] * len(df), index=df.index)
-    if name_col and name_col in df.columns:
-        name = df[name_col].apply(_normalize_name)
-    else:
-        name = pd.Series([""] * len(df), index=df.index)
-
-    key = phone.where(phone != "", store + "|" + name)
-    has_identifier = (phone != "") | (name != "")
-    key = key.where(has_identifier, None)
-    return key
+def build_new_repeat_key(df, name_col, phone_col):
+    """Key used for Unique Customer / New-Repeat identification: Number if
+    present, else Name — purely identity-based, with NO store scoping.
+    This must match build_customer_key exactly, since Unique/New/Repeat
+    are always determined by Number-else-Name only, per spec."""
+    return build_customer_key(df, name_col, phone_col)
 
 
 def build_conversion_key(df, store_col, month_col, name_col, phone_col):
@@ -451,8 +440,9 @@ def build_conversion_key(df, store_col, month_col, name_col, phone_col):
 def conversion_metrics_by(walkins_df, sales_df, group_col):
     """Sales Conversion Count = unique Walk-in Conversion_Keys also found in Sales Conversion_Keys.
     Sales Conversion % = Sales Conversion Count / Total Unique Walkin."""
-    if walkins_df.empty or group_col not in walkins_df.columns:
-        return pd.DataFrame(columns=[group_col, "Total_Unique_Walkin", "Sales_Conversion_Count", "Conversion %"])
+    gcols = _gc_list(group_col)
+    if walkins_df.empty or not all(c in walkins_df.columns for c in gcols):
+        return pd.DataFrame(columns=gcols + ["Total_Unique_Walkin", "Sales_Conversion_Count", "Conversion %"])
     sales_keys = set(sales_df["Conversion_Key"].dropna()) if not sales_df.empty else set()
     w = walkins_df.copy()
     w["_Matched"] = w["Conversion_Key"].isin(sales_keys)
@@ -493,21 +483,18 @@ def tag_new_repeat(df, store_col, key_col, month_sort_col, group_by_store=True):
     return df
 
 
-def tag_sales_walkin_conversion(walkins_df, sales_df, walk_key_col, sales_key_col, walk_date_col, sales_date_col):
+def tag_sales_walkin_conversion(walkins_df, sales_df):
+    """Tag each walk-in row Converted/Not Converted using the SAME
+    Store Name|Month-YY|Number(-or-Name) Conversion_Key used everywhere
+    else for Sales Conversion metrics. Keeping this as one single
+    definition means the 'Converted' KPI card, the Conversion % card,
+    and every store/associate-level Conversion % table always agree."""
     wdf = walkins_df.copy()
     if sales_df.empty or wdf.empty:
         wdf["Sales_Walkin_Tag"] = "Not Converted"
         return wdf
-    sdf = sales_df[[sales_key_col, sales_date_col]].dropna(subset=[sales_key_col]).copy()
-    sdf["_ConvMonth"] = sdf[sales_date_col].dt.strftime("%Y-%m")
-    sdf = sdf[[sales_key_col, "_ConvMonth"]].drop_duplicates()
-    sdf["_matched"] = "Converted"
-    sdf = sdf.rename(columns={sales_key_col: walk_key_col})
-
-    wdf["_ConvMonth"] = wdf[walk_date_col].dt.strftime("%Y-%m")
-    wdf = wdf.merge(sdf, on=[walk_key_col, "_ConvMonth"], how="left")
-    wdf["Sales_Walkin_Tag"] = wdf["_matched"].fillna("Not Converted")
-    wdf = wdf.drop(columns=["_matched", "_ConvMonth"])
+    sales_keys = set(sales_df["Conversion_Key"].dropna())
+    wdf["Sales_Walkin_Tag"] = np.where(wdf["Conversion_Key"].isin(sales_keys), "Converted", "Not Converted")
     return wdf
 
 
@@ -570,9 +557,9 @@ def prepare_data():
     sales["Conversion_Key"] = build_conversion_key(sales, SALES_STORE_COL, "Month_Label", sales_name_col, sales_phone_col)
     walkins["Conversion_Key"] = build_conversion_key(walkins, WALKIN_STORE_COL, "Month_Label", walkin_name_col, walkin_phone_col)
 
-    # ---- New/Repeat key: Number if present (global, cross-store), else Store|Name (store-scoped) ----
-    sales["NewRepeat_Key"] = build_new_repeat_key(sales, SALES_STORE_COL, sales_name_col, sales_phone_col)
-    walkins["NewRepeat_Key"] = build_new_repeat_key(walkins, WALKIN_STORE_COL, walkin_name_col, walkin_phone_col)
+    # ---- New/Repeat key: Number if present, else Name — no store scoping (matches Unique Customer key) ----
+    sales["NewRepeat_Key"] = build_new_repeat_key(sales, sales_name_col, sales_phone_col)
+    walkins["NewRepeat_Key"] = build_new_repeat_key(walkins, walkin_name_col, walkin_phone_col)
 
     # ---- New/Repeat tagging ----
     # Both Sales & Walk-in: New/Repeat is by MONTH only, using NewRepeat_Key
@@ -580,10 +567,9 @@ def prepare_data():
     sales = tag_new_repeat(sales, SALES_STORE_COL, "NewRepeat_Key", "Month_Sort", group_by_store=False)
     walkins = tag_new_repeat(walkins, WALKIN_STORE_COL, "NewRepeat_Key", "Month_Sort", group_by_store=False)
 
-    # ---- Sales_Walkin Tag: walk-in converted if matched in Sales same day ----
-    walkins = tag_sales_walkin_conversion(
-        walkins, sales, "Customer_Key", "Customer_Key", WALKIN_DATE_COL, SALES_DATE_COL
-    )
+    # ---- Sales_Walkin Tag: walk-in converted if its Conversion_Key (Store|Month-YY|Number-or-Name)
+    #      is also found in Sales — same definition as the Conversion % metrics below ----
+    walkins = tag_sales_walkin_conversion(walkins, sales)
 
     # ---- LimeChat → Sales conversion: LimeChat Phone Number vs Sales Mobile Number, same month ----
     limechat = tag_limechat_conversion(limechat, sales, sales_phone_col)
@@ -718,8 +704,16 @@ if selected_limechat_agents:
 # =====================================================
 # GROUP-LEVEL METRIC BUILDERS
 # =====================================================
+def _gc_list(group_col):
+    """Normalize a group_col argument (single column name or list of column
+    names) into a list, so every metrics function can support drilling down
+    by more than one dimension at once (e.g. Store + Month-YY together)."""
+    return group_col if isinstance(group_col, list) else [group_col]
+
+
 def sales_metrics_by(df, group_col, targets_df=None, target_group_col=None):
-    if df.empty or group_col not in df.columns:
+    gcols = _gc_list(group_col)
+    if df.empty or not all(c in df.columns for c in gcols):
         return pd.DataFrame()
 
     out = df.groupby(group_col).agg(
@@ -733,7 +727,7 @@ def sales_metrics_by(df, group_col, targets_df=None, target_group_col=None):
     uc = df.groupby(group_col)["Customer_Key"].nunique().rename("Unique_Customer")
     out = out.merge(uc, on=group_col, how="left")
 
-    nr = df.dropna(subset=["New/Repeat"]).groupby([group_col, "New/Repeat"])["Customer_Key"].nunique().unstack(fill_value=0)
+    nr = df.dropna(subset=["New/Repeat"]).groupby(gcols + ["New/Repeat"])["Customer_Key"].nunique().unstack(fill_value=0)
     for c in ["New", "Repeat"]:
         if c not in nr.columns:
             nr[c] = 0
@@ -745,16 +739,16 @@ def sales_metrics_by(df, group_col, targets_df=None, target_group_col=None):
     out["New %"] = (out["New_Customer_Count"] / tot_nr.replace(0, np.nan) * 100).round(1)
     out["Repeat %"] = (out["Repeat_Customer_Count"] / tot_nr.replace(0, np.nan) * 100).round(1)
 
-    rev_nr = df.dropna(subset=["New/Repeat"]).groupby([group_col, "New/Repeat"])[SALES_NET_COL].sum().unstack(fill_value=0)
+    rev_nr = df.dropna(subset=["New/Repeat"]).groupby(gcols + ["New/Repeat"])[SALES_NET_COL].sum().unstack(fill_value=0)
     for c in ["New", "Repeat"]:
         if c not in rev_nr.columns:
             rev_nr[c] = 0
     rev_nr = rev_nr.rename(columns={"New": "Revenue_From_New", "Repeat": "Revenue_From_Repeat"}).reset_index()
     out = out.merge(rev_nr, on=group_col, how="left")
 
-    tcol = target_group_col or group_col
-    if targets_df is not None and not targets_df.empty and tcol in targets_df.columns:
-        tgt = targets_df.groupby(tcol)["Target"].sum().reset_index().rename(columns={tcol: group_col})
+    tgcols = _gc_list(target_group_col) if target_group_col else gcols
+    if targets_df is not None and not targets_df.empty and all(c in targets_df.columns for c in tgcols):
+        tgt = targets_df.groupby(tgcols)["Target"].sum().reset_index().rename(columns=dict(zip(tgcols, gcols)))
         out = out.merge(tgt, on=group_col, how="left")
     else:
         out["Target"] = 0
@@ -766,10 +760,11 @@ def sales_metrics_by(df, group_col, targets_df=None, target_group_col=None):
 
 
 def walkin_metrics_by(df, group_col):
-    if df.empty or group_col not in df.columns:
+    gcols = _gc_list(group_col)
+    if df.empty or not all(c in df.columns for c in gcols):
         return pd.DataFrame()
     tot = df.groupby(group_col)["Customer_Key"].nunique().rename("Total_Unique_Walkin").reset_index()
-    nr = df.dropna(subset=["New/Repeat"]).groupby([group_col, "New/Repeat"])["Customer_Key"].nunique().unstack(fill_value=0)
+    nr = df.dropna(subset=["New/Repeat"]).groupby(gcols + ["New/Repeat"])["Customer_Key"].nunique().unstack(fill_value=0)
     for c in ["New", "Repeat"]:
         if c not in nr.columns:
             nr[c] = 0
@@ -783,23 +778,34 @@ def walkin_metrics_by(df, group_col):
     return out
 
 
-def build_store_table(sales_df, walkins_df, targets_df):
-    s = sales_metrics_by(sales_df, SALES_STORE_COL, targets_df)
-    w = walkin_metrics_by(walkins_df, WALKIN_STORE_COL)
+def build_store_table(sales_df, walkins_df, targets_df, group_by_month=False):
+    """group_by_month=True drills one level further down: Store x Month-YY
+    instead of Store totals. This matters whenever more than one month is
+    in scope — without the Month-YY split, a customer who visits the same
+    store in two different months gets miscounted (their New tag in month 1
+    and Repeat tag in month 2 both land in the same aggregated row, so
+    New_Customer_Count + Repeat_Customer_Count no longer reconciles with
+    Unique_Customer for that row)."""
+    sales_gc = [SALES_STORE_COL, "Month_Label"] if group_by_month else SALES_STORE_COL
+    walk_gc = [WALKIN_STORE_COL, "Month_Label"] if group_by_month else WALKIN_STORE_COL
+    join_cols = [SALES_STORE_COL, "Month_Label"] if group_by_month else [SALES_STORE_COL]
+
+    s = sales_metrics_by(sales_df, sales_gc, targets_df)
+    w = walkin_metrics_by(walkins_df, walk_gc)
     if s.empty:
         return s
     if not w.empty:
-        w = w.rename(columns={WALKIN_STORE_COL: SALES_STORE_COL})[[SALES_STORE_COL, "Total_Unique_Walkin"]]
-        s = s.merge(w, on=SALES_STORE_COL, how="left")
+        w = w.rename(columns={WALKIN_STORE_COL: SALES_STORE_COL})[join_cols + ["Total_Unique_Walkin"]]
+        s = s.merge(w, on=join_cols, how="left")
     else:
         s["Total_Unique_Walkin"] = 0
     s["Total_Unique_Walkin"] = s["Total_Unique_Walkin"].fillna(0)
 
     # ---- Conversion %: StoreName|Month-YY|Number-or-Name key matched between Walk-in and Sales ----
-    conv = conversion_metrics_by(walkins_df, sales_df, WALKIN_STORE_COL)
+    conv = conversion_metrics_by(walkins_df, sales_df, walk_gc)
     if not conv.empty:
-        conv = conv.rename(columns={WALKIN_STORE_COL: SALES_STORE_COL})[[SALES_STORE_COL, "Conversion %"]]
-        s = s.drop(columns=["Conversion %"], errors="ignore").merge(conv, on=SALES_STORE_COL, how="left")
+        conv = conv.rename(columns={WALKIN_STORE_COL: SALES_STORE_COL})[join_cols + ["Conversion %"]]
+        s = s.drop(columns=["Conversion %"], errors="ignore").merge(conv, on=join_cols, how="left")
     else:
         s["Conversion %"] = None
 
@@ -808,8 +814,9 @@ def build_store_table(sales_df, walkins_df, targets_df):
 
 def format_sales_table(df, group_col):
     d = df.copy()
+    gcols = _gc_list(group_col)
     d = d.rename(columns={
-        group_col: group_col, "Revenue": "Revenue", "Unique_Invoice": "Unique Invoice",
+        "Revenue": "Revenue", "Unique_Invoice": "Unique Invoice",
         "Unique_Customer": "Unique Customer", "New_Customer_Count": "New Customer Count",
         "Repeat_Customer_Count": "Repeat Customer Count", "Revenue_From_New": "Revenue From New Customer",
         "Revenue_From_Repeat": "Revenue From Repeat Customer", "Total_Unique_Walkin": "Total Walkin",
@@ -824,8 +831,8 @@ def format_sales_table(df, group_col):
         d["ATV"] = d["ATV"].apply(lambda v: f"₹{v:,.0f}" if pd.notna(v) else "N/A")
     if "UPT" in d.columns:
         d["UPT"] = d["UPT"].apply(lambda v: f"{v:.2f}" if pd.notna(v) else "N/A")
-    cols_order = [c for c in [
-        group_col, "Target", "Revenue", "Ach %", "Shortfall", "Unique Invoice", "ATV", "UPT",
+    cols_order = gcols + [c for c in [
+        "Target", "Revenue", "Ach %", "Shortfall", "Unique Invoice", "ATV", "UPT",
         "Total Walkin", "Unique Customer", "Conversion %", "New Customer Count", "Repeat Customer Count",
         "New %", "Repeat %", "Revenue From New Customer", "Revenue From Repeat Customer",
     ] if c in d.columns]
@@ -834,10 +841,11 @@ def format_sales_table(df, group_col):
 
 def format_walkin_table(df, group_col):
     d = df.copy()
+    gcols = _gc_list(group_col)
     d = d.rename(columns={"Total_Unique_Walkin": "Total Unique Walkin", "New_Walkin": "New Walkin",
                            "Repeat_Walkin": "Repeat Walkin"})
-    cols_order = [c for c in [group_col, "Total Unique Walkin", "New Walkin", "Repeat Walkin",
-                               "New Walkin %", "Repeat Walkin %"] if c in d.columns]
+    cols_order = gcols + [c for c in ["Total Unique Walkin", "New Walkin", "Repeat Walkin",
+                                       "New Walkin %", "Repeat Walkin %"] if c in d.columns]
     return d[cols_order]
 
 
@@ -958,7 +966,9 @@ repeat_pct = repeat_customer_count / tot_nr * 100 if tot_nr > 0 else 0
 revenue_from_new = filtered_sales[filtered_sales["New/Repeat"] == "New"][SALES_NET_COL].sum()
 revenue_from_repeat = filtered_sales[filtered_sales["New/Repeat"] == "Repeat"][SALES_NET_COL].sum()
 
-converted_walkins = filtered_walkins[filtered_walkins["Sales_Walkin_Tag"] == "Converted"]["Customer_Key"].nunique()
+# Same definition/number as "Conversion %"'s numerator (sales_conversion_count) above —
+# both the count and the % must always be consistent with each other.
+converted_walkins = sales_conversion_count
 
 walkin_new = filtered_walkins[filtered_walkins["New/Repeat"] == "New"]["Customer_Key"].nunique()
 walkin_repeat = filtered_walkins[filtered_walkins["New/Repeat"] == "Repeat"]["Customer_Key"].nunique()
@@ -1108,12 +1118,31 @@ with tab_trends:
 
 # ---------------- SALES TAB ----------------
 with tab_sales:
-    st.markdown('<div class="section-kicker">Store Wise Table Format</div>', unsafe_allow_html=True)
-    store_table = build_store_table(filtered_sales, filtered_walkins, target_scope)
+    st.markdown('<div class="section-kicker">Month-YY Wise Summary</div>', unsafe_allow_html=True)
+    st.caption("Unique Customer / New / Repeat here are counted within each Month-YY (across all stores in scope).")
+    month_table = sales_metrics_by(filtered_sales, "Month_Label", target_scope, target_group_col="Month_Label")
+    if not month_table.empty:
+        w_month = walkin_metrics_by(filtered_walkins, "Month_Label")
+        if not w_month.empty:
+            month_table = month_table.merge(w_month[["Month_Label", "Total_Unique_Walkin"]], on="Month_Label", how="left")
+            month_table["Total_Unique_Walkin"] = month_table["Total_Unique_Walkin"].fillna(0)
+        conv_month = conversion_metrics_by(filtered_walkins, filtered_sales, "Month_Label")
+        if not conv_month.empty:
+            month_table = month_table.merge(conv_month[["Month_Label", "Conversion %"]], on="Month_Label", how="left")
+        month_table["_sort"] = pd.to_datetime(month_table["Month_Label"], format="%b-%y", errors="coerce")
+        month_table = month_table.sort_values("_sort").drop(columns=["_sort"])
+        st.dataframe(format_sales_table(month_table, "Month_Label"), use_container_width=True, hide_index=True)
+    else:
+        st.info("No sales data for this selection.")
+
+    st.markdown("---")
+    st.markdown('<div class="section-kicker">Store Wise Table Format (Store × Month-YY)</div>', unsafe_allow_html=True)
+    st.caption("Each row is one store in one Month-YY, so Unique/New/Repeat customer counts are never mixed across months.")
+    store_table = build_store_table(filtered_sales, filtered_walkins, target_scope, group_by_month=True)
     if store_table.empty:
         st.info("No sales data for this selection.")
     else:
-        st.dataframe(format_sales_table(store_table, SALES_STORE_COL), use_container_width=True, hide_index=True)
+        st.dataframe(format_sales_table(store_table, [SALES_STORE_COL, "Month_Label"]), use_container_width=True, hide_index=True)
 
     st.markdown('<div class="section-kicker">Sales Associate Table Format</div>', unsafe_allow_html=True)
     if not sales_assoc_candidates:
@@ -1159,12 +1188,24 @@ with tab_sales:
 
 # ---------------- WALKIN TAB ----------------
 with tab_walkin:
-    st.markdown('<div class="section-kicker">Store Wise Table Format</div>', unsafe_allow_html=True)
-    w_store_table = walkin_metrics_by(filtered_walkins, WALKIN_STORE_COL)
+    st.markdown('<div class="section-kicker">Month-YY Wise Summary</div>', unsafe_allow_html=True)
+    st.caption("Unique / New / Repeat Walk-in here are counted within each Month-YY (across all stores in scope).")
+    w_month_table = walkin_metrics_by(filtered_walkins, "Month_Label")
+    if not w_month_table.empty:
+        w_month_table["_sort"] = pd.to_datetime(w_month_table["Month_Label"], format="%b-%y", errors="coerce")
+        w_month_table = w_month_table.sort_values("_sort").drop(columns=["_sort"])
+        st.dataframe(format_walkin_table(w_month_table, "Month_Label"), use_container_width=True, hide_index=True)
+    else:
+        st.info("No walk-in data for this selection.")
+
+    st.markdown("---")
+    st.markdown('<div class="section-kicker">Store Wise Table Format (Store × Month-YY)</div>', unsafe_allow_html=True)
+    st.caption("Each row is one store in one Month-YY, so Unique/New/Repeat walk-in counts are never mixed across months.")
+    w_store_table = walkin_metrics_by(filtered_walkins, [WALKIN_STORE_COL, "Month_Label"])
     if w_store_table.empty:
         st.info("No walk-in data for this selection.")
     else:
-        st.dataframe(format_walkin_table(w_store_table.sort_values("Total_Unique_Walkin", ascending=False), WALKIN_STORE_COL),
+        st.dataframe(format_walkin_table(w_store_table.sort_values("Total_Unique_Walkin", ascending=False), [WALKIN_STORE_COL, "Month_Label"]),
                      use_container_width=True, hide_index=True)
 
     st.markdown('<div class="section-kicker">Sales Associate Table Format</div>', unsafe_allow_html=True)
