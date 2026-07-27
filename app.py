@@ -938,16 +938,22 @@ else:
 unique_customers = filtered_sales["Customer_Key"].nunique()
 total_walkins_kpi = filtered_walkins["Customer_Key"].nunique()
 
-# ---- Sales Conversion Count/%: StoreName|Month-YY|Number-or-Name key matched between Walk-in and Sales ----
-# NOTE: denominator uses Conversion_Key (Store+Month+Number-or-Name) to match the numerator's
-# granularity — using Customer_Key (no month) here would under-count the denominator whenever a
-# customer walks in across multiple months, inflating Conversion %.
+# ---- Sales Conversion Count/%: overall KPI ----
+# Total Unique Walkin here is a pure headcount by Number-or-Name only (no store, no month) —
+# a customer visiting 2 stores, or the same store across 2 months, still counts as ONE person.
+# Drilling down to a specific month (sidebar filter) or a specific store (Store-wise table)
+# still gives the accurate, granular breakdown — those use Conversion_Key and are unaffected
+# by this choice (store-grouping already makes the key-choice a no-op at that level).
+# NOTE: because the numerator still matches on Store+Month (Conversion_Key) while this
+# denominator does not, Conversion % can technically exceed 100% if a customer converts at
+# multiple stores/months within the same "All months" view — this is the accepted trade-off
+# for keeping the headline KPI a true distinct-person count.
 _sales_conversion_keys_kpi = set(filtered_sales["Conversion_Key"].dropna())
 sales_conversion_count = filtered_walkins[
     filtered_walkins["Conversion_Key"].isin(_sales_conversion_keys_kpi)
 ]["Conversion_Key"].nunique()
-total_walkin_conversion_keys = filtered_walkins["Conversion_Key"].nunique()
-conversion_pct = sales_conversion_count / total_walkin_conversion_keys * 100 if total_walkin_conversion_keys > 0 else 0
+total_walkin_headcount = filtered_walkins["Customer_Key"].nunique()
+conversion_pct = sales_conversion_count / total_walkin_headcount * 100 if total_walkin_headcount > 0 else 0
 
 new_customer_count = filtered_sales[filtered_sales["New/Repeat"] == "New"]["Customer_Key"].nunique()
 repeat_customer_count = filtered_sales[filtered_sales["New/Repeat"] == "Repeat"]["Customer_Key"].nunique()
