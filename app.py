@@ -261,6 +261,31 @@ def _clean_team_targets(df):
     return df[["Store", "Agent", "Month_Label", "Month_Sort", "Target"]]
 
 
+import time
+
+
+def _with_retry(func, *args, max_retries=4, base_delay=2, **kwargs):
+    """Retries a Google API call on transient errors (503/500/429) with exponential backoff.
+    Non-transient errors (auth, permissions, not-found) raise immediately — no point retrying those."""
+    transient_codes = {429, 500, 502, 503, 504}
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            return func(*args, **kwargs)
+        except gspread.exceptions.APIError as e:
+            status = None
+            try:
+                status = e.response.status_code
+            except Exception:
+                pass
+            last_err = e
+            if status not in transient_codes:
+                raise  # permission/auth/not-found errors: fail fast, retrying won't help
+            if attempt < max_retries - 1:
+                time.sleep(base_delay * (2 ** attempt))  # 2s, 4s, 8s...
+    raise last_err
+
+
 @st.cache_data(ttl=300)
 def load_data():
     creds = Credentials.from_service_account_info(
@@ -270,20 +295,20 @@ def load_data():
 
     client = gspread.authorize(creds)
 
-    sales_ss = client.open_by_key(SALES_SHEET_ID)
-    walkins_ss = client.open_by_key(WALKINS_SHEET_ID)
-    targets_ss = client.open_by_key(TARGETS_SHEET_ID)
-    limechat_ss = client.open_by_key(LIMECHAT_SHEET_ID)
+    sales_ss = _with_retry(client.open_by_key, SALES_SHEET_ID)
+    walkins_ss = _with_retry(client.open_by_key, WALKINS_SHEET_ID)
+    targets_ss = _with_retry(client.open_by_key, TARGETS_SHEET_ID)
+    limechat_ss = _with_retry(client.open_by_key, LIMECHAT_SHEET_ID)
 
-    sales_ws = _get_worksheet(sales_ss, SALES_GID)
-    walkins_ws = _get_worksheet(walkins_ss, WALKINS_GID)
-    targets_ws = _get_worksheet(targets_ss, TARGETS_GID)
-    limechat_ws = _get_worksheet(limechat_ss, LIMECHAT_GID)
+    sales_ws = _with_retry(_get_worksheet, sales_ss, SALES_GID)
+    walkins_ws = _with_retry(_get_worksheet, walkins_ss, WALKINS_GID)
+    targets_ws = _with_retry(_get_worksheet, targets_ss, TARGETS_GID)
+    limechat_ws = _with_retry(_get_worksheet, limechat_ss, LIMECHAT_GID)
 
-    sales = get_as_dataframe(sales_ws, evaluate_formulas=True)
-    walkins = get_as_dataframe(walkins_ws, evaluate_formulas=True)
-    targets_raw = get_as_dataframe(targets_ws, evaluate_formulas=True)
-    limechat = get_as_dataframe(limechat_ws, evaluate_formulas=True)
+    sales = _with_retry(get_as_dataframe, sales_ws, evaluate_formulas=True)
+    walkins = _with_retry(get_as_dataframe, walkins_ws, evaluate_formulas=True)
+    targets_raw = _with_retry(get_as_dataframe, targets_ws, evaluate_formulas=True)
+    limechat = _with_retry(get_as_dataframe, limechat_ws, evaluate_formulas=True)
 
     sales = sales.dropna(how="all").dropna(axis=1, how="all")
     walkins = walkins.dropna(how="all").dropna(axis=1, how="all")
@@ -607,13 +632,24 @@ try:
         missing_cols_warning, sales_assoc_candidates, walkin_assoc_candidates,
     ) = prepare_data()
 except Exception as e:
-    st.error(
-        f"Could not load data: {e}\n\n"
-        "Check that:\n"
-        "1. `.streamlit/secrets.toml` has a `[gcp_service_account]` section.\n"
-        "2. All sheets (Sales, Walk-ins, Targets, LimeChat) are shared with the service account's email.\n"
-        "3. The sheet IDs / gid values at the top of the file are correct."
-    )
+    is_transient = isinstance(e, gspread.exceptions.APIError) and getattr(
+        getattr(e, "response", None), "status_code", None
+    ) in (429, 500, 502, 503, 504)
+    if is_transient:
+        st.error(
+            f"Google's Sheets API was temporarily unavailable: {e}\n\n"
+            "This is usually a brief outage on Google's side, not a config issue — "
+            "the app already retried automatically a few times. "
+            "Please click 'Rerun' (top-right menu) or reload the page in a minute."
+        )
+    else:
+        st.error(
+            f"Could not load data: {e}\n\n"
+            "Check that:\n"
+            "1. `.streamlit/secrets.toml` has a `[gcp_service_account]` section.\n"
+            "2. All sheets (Sales, Walk-ins, Targets, LimeChat) are shared with the service account's email.\n"
+            "3. The sheet IDs / gid values at the top of the file are correct."
+        )
     st.stop()
 
 # =====================================================
