@@ -457,7 +457,7 @@ def conversion_metrics_by(walkins_df, sales_df, group_col):
     w = walkins_df.copy()
     w["_Matched"] = w["Conversion_Key"].isin(sales_keys)
 
-    total = w.groupby(group_col)["Customer_Key"].nunique().rename("Total_Unique_Walkin")
+    total = w.groupby(group_col)["Conversion_Key"].nunique().rename("Total_Unique_Walkin")
     matched = w[w["_Matched"]].groupby(group_col)["Conversion_Key"].nunique().rename("Sales_Conversion_Count")
     out = pd.concat([total, matched], axis=1).reset_index()
     out["Total_Unique_Walkin"] = out["Total_Unique_Walkin"].fillna(0)
@@ -939,11 +939,15 @@ unique_customers = filtered_sales["Customer_Key"].nunique()
 total_walkins_kpi = filtered_walkins["Customer_Key"].nunique()
 
 # ---- Sales Conversion Count/%: StoreName|Month-YY|Number-or-Name key matched between Walk-in and Sales ----
+# NOTE: denominator uses Conversion_Key (Store+Month+Number-or-Name) to match the numerator's
+# granularity — using Customer_Key (no month) here would under-count the denominator whenever a
+# customer walks in across multiple months, inflating Conversion %.
 _sales_conversion_keys_kpi = set(filtered_sales["Conversion_Key"].dropna())
 sales_conversion_count = filtered_walkins[
     filtered_walkins["Conversion_Key"].isin(_sales_conversion_keys_kpi)
 ]["Conversion_Key"].nunique()
-conversion_pct = sales_conversion_count / total_walkins_kpi * 100 if total_walkins_kpi > 0 else 0
+total_walkin_conversion_keys = filtered_walkins["Conversion_Key"].nunique()
+conversion_pct = sales_conversion_count / total_walkin_conversion_keys * 100 if total_walkin_conversion_keys > 0 else 0
 
 new_customer_count = filtered_sales[filtered_sales["New/Repeat"] == "New"]["Customer_Key"].nunique()
 repeat_customer_count = filtered_sales[filtered_sales["New/Repeat"] == "Repeat"]["Customer_Key"].nunique()
