@@ -512,8 +512,77 @@ def tag_limechat_conversion(limechat_df, sales_df, sales_phone_col):
     return ldf
 
 
-try:
+@st.cache_data(ttl=300)
+def prepare_data():
+    """Runs the full prep pipeline ONCE per cache window (not on every filter click):
+    load raw sheets -> resolve columns -> build keys -> tag New/Repeat -> tag conversions."""
     sales, walkins, targets, team_targets, limechat = load_data()
+
+    # ---- resolve name / phone columns (configured name, else auto-detect) ----
+    sales_name_col = _resolve_col(sales, SALES_NAME_COL, NAME_KEYWORDS, exclude=["store", "associate"])
+    sales_phone_col = _resolve_col(sales, SALES_PHONE_COL, PHONE_KEYWORDS)
+    walkin_name_col = _resolve_col(walkins, WALKIN_NAME_COL, NAME_KEYWORDS, exclude=["store", "associate"])
+    walkin_phone_col = _resolve_col(walkins, WALKIN_PHONE_COL, PHONE_KEYWORDS)
+
+    category_col = _find_column_ci(sales, SALES_CATEGORY_COL)
+    collection_col = _find_column_ci(sales, SALES_COLLECTION_COL)
+    priceband_col = _find_column_ci(sales, SALES_PRICEBAND_COL)
+    ticket_col = _find_column_ci(limechat, LIMECHAT_TICKET_COL)  # None if the sheet doesn't have this column
+
+    missing_cols_warning = []
+    if not sales_name_col and not sales_phone_col:
+        missing_cols_warning.append("Sales sheet: no Name/Mobile Number column found.")
+    if not walkin_name_col and not walkin_phone_col:
+        missing_cols_warning.append("Walk-in sheet: no Name/Mobile Number column found.")
+    if not collection_col:
+        missing_cols_warning.append(f"Sales sheet: no '{SALES_COLLECTION_COL}' column found — check SALES_COLLECTION_COL.")
+    if not priceband_col:
+        missing_cols_warning.append(f"Sales sheet: no '{SALES_PRICEBAND_COL}' column found — check SALES_PRICEBAND_COL.")
+    if not category_col:
+        missing_cols_warning.append(f"Sales sheet: no '{SALES_CATEGORY_COL}' column found — check SALES_CATEGORY_COL.")
+    if team_targets.empty:
+        missing_cols_warning.append("Team Target tab: not found, empty, or missing Store/Agent/Target/Month-YY columns.")
+
+    # ---- build unique customer keys ----
+    sales["Customer_Key"] = build_customer_key(sales, sales_name_col, sales_phone_col)
+    walkins["Customer_Key"] = build_customer_key(walkins, walkin_name_col, walkin_phone_col)
+
+    # ---- Sales Conversion key: StoreName|Month-YY|Number (falls back to Name if Number missing) ----
+    sales["Conversion_Key"] = build_conversion_key(sales, SALES_STORE_COL, "Month_Label", sales_name_col, sales_phone_col)
+    walkins["Conversion_Key"] = build_conversion_key(walkins, WALKIN_STORE_COL, "Month_Label", walkin_name_col, walkin_phone_col)
+
+    # ---- New/Repeat tagging ----
+    # Both Sales & Walk-in: New/Repeat is per CUSTOMER + MONTH only (store-agnostic) —
+    #   same customer, same month (any date) = New; same customer, later month = Repeat.
+    sales = tag_new_repeat(sales, SALES_STORE_COL, "Customer_Key", "Month_Sort", group_by_store=False)
+    walkins = tag_new_repeat(walkins, WALKIN_STORE_COL, "Customer_Key", "Month_Sort", group_by_store=False)
+
+    # ---- Sales_Walkin Tag: walk-in converted if matched in Sales same day ----
+    walkins = tag_sales_walkin_conversion(
+        walkins, sales, "Customer_Key", "Customer_Key", WALKIN_DATE_COL, SALES_DATE_COL
+    )
+
+    # ---- LimeChat → Sales conversion: LimeChat Phone Number vs Sales Mobile Number, same month ----
+    limechat = tag_limechat_conversion(limechat, sales, sales_phone_col)
+
+    sales_assoc_candidates = [c for c in sales.columns if any(k in str(c).lower() for k in ASSOC_KEYWORDS)]
+    walkin_assoc_candidates = [c for c in walkins.columns if any(k in str(c).lower() for k in ASSOC_KEYWORDS)]
+
+    return (
+        sales, walkins, targets, team_targets, limechat,
+        sales_name_col, sales_phone_col, walkin_name_col, walkin_phone_col,
+        category_col, collection_col, priceband_col, ticket_col,
+        missing_cols_warning, sales_assoc_candidates, walkin_assoc_candidates,
+    )
+
+
+try:
+    (
+        sales, walkins, targets, team_targets, limechat,
+        sales_name_col, sales_phone_col, walkin_name_col, walkin_phone_col,
+        category_col, collection_col, priceband_col, ticket_col,
+        missing_cols_warning, sales_assoc_candidates, walkin_assoc_candidates,
+    ) = prepare_data()
 except Exception as e:
     st.error(
         f"Could not load data: {e}\n\n"
@@ -523,57 +592,6 @@ except Exception as e:
         "3. The sheet IDs / gid values at the top of the file are correct."
     )
     st.stop()
-
-# ---- resolve name / phone columns (configured name, else auto-detect) ----
-sales_name_col = _resolve_col(sales, SALES_NAME_COL, NAME_KEYWORDS, exclude=["store", "associate"])
-sales_phone_col = _resolve_col(sales, SALES_PHONE_COL, PHONE_KEYWORDS)
-walkin_name_col = _resolve_col(walkins, WALKIN_NAME_COL, NAME_KEYWORDS, exclude=["store", "associate"])
-walkin_phone_col = _resolve_col(walkins, WALKIN_PHONE_COL, PHONE_KEYWORDS)
-
-category_col = _find_column_ci(sales, SALES_CATEGORY_COL)
-collection_col = _find_column_ci(sales, SALES_COLLECTION_COL)
-priceband_col = _find_column_ci(sales, SALES_PRICEBAND_COL)
-ticket_col = _find_column_ci(limechat, LIMECHAT_TICKET_COL)  # None if the sheet doesn't have this column
-
-missing_cols_warning = []
-if not sales_name_col and not sales_phone_col:
-    missing_cols_warning.append("Sales sheet: no Name/Mobile Number column found.")
-if not walkin_name_col and not walkin_phone_col:
-    missing_cols_warning.append("Walk-in sheet: no Name/Mobile Number column found.")
-if not collection_col:
-    missing_cols_warning.append(f"Sales sheet: no '{SALES_COLLECTION_COL}' column found — check SALES_COLLECTION_COL.")
-if not priceband_col:
-    missing_cols_warning.append(f"Sales sheet: no '{SALES_PRICEBAND_COL}' column found — check SALES_PRICEBAND_COL.")
-if not category_col:
-    missing_cols_warning.append(f"Sales sheet: no '{SALES_CATEGORY_COL}' column found — check SALES_CATEGORY_COL.")
-if team_targets.empty:
-    missing_cols_warning.append("Team Target tab: not found, empty, or missing Store/Agent/Target/Month-YY columns.")
-
-# ---- build unique customer keys ----
-sales["Customer_Key"] = build_customer_key(sales, sales_name_col, sales_phone_col)
-walkins["Customer_Key"] = build_customer_key(walkins, walkin_name_col, walkin_phone_col)
-
-# ---- Sales Conversion key: StoreName|Month-YY|Number (falls back to Name if Number missing) ----
-sales["Conversion_Key"] = build_conversion_key(sales, SALES_STORE_COL, "Month_Label", sales_name_col, sales_phone_col)
-walkins["Conversion_Key"] = build_conversion_key(walkins, WALKIN_STORE_COL, "Month_Label", walkin_name_col, walkin_phone_col)
-
-# ---- New/Repeat tagging ----
-# Sales: New/Repeat is per CUSTOMER + MONTH only (store-agnostic) —
-#   same customer, same month (any date) = New; same customer, later month = Repeat.
-sales = tag_new_repeat(sales, SALES_STORE_COL, "Customer_Key", "Month_Sort", group_by_store=False)
-# Walk-in: same logic — New/Repeat is per CUSTOMER + MONTH only (store-agnostic)
-walkins = tag_new_repeat(walkins, WALKIN_STORE_COL, "Customer_Key", "Month_Sort", group_by_store=False)
-
-# ---- Sales_Walkin Tag: walk-in converted if matched in Sales same day ----
-walkins = tag_sales_walkin_conversion(
-    walkins, sales, "Customer_Key", "Customer_Key", WALKIN_DATE_COL, SALES_DATE_COL
-)
-
-# ---- LimeChat → Sales conversion: LimeChat Phone Number vs Sales Mobile Number, same month ----
-limechat = tag_limechat_conversion(limechat, sales, sales_phone_col)
-
-sales_assoc_candidates = [c for c in sales.columns if any(k in str(c).lower() for k in ASSOC_KEYWORDS)]
-walkin_assoc_candidates = [c for c in walkins.columns if any(k in str(c).lower() for k in ASSOC_KEYWORDS)]
 
 # =====================================================
 # SIDEBAR — FILTERS
@@ -1030,12 +1048,6 @@ tab_trends, tab_sales, tab_walkin, tab_limechat, tab_product, tab_yoy, tab_raw =
         "📄 Raw Data"
     ]
 )
-
-# ---------------- TRENDS CHARTS ----------------
-# Kept lean: only the two core trend lines. The "New vs Repeat" 3-key
-# groupby was dropped per request — it's the heaviest of the three and
-# least essential; New/Repeat splits are already available store-wise
-# and associate-wise in the Sales/Walkin tabs.
 
 # ---------------- SALES TAB ----------------
 with tab_sales:
