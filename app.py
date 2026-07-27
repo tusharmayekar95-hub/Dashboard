@@ -1037,9 +1037,8 @@ st.markdown("---")
 # =====================================================
 # TABS
 # =====================================================
-tab_trends, tab_sales, tab_walkin, tab_limechat, tab_product, tab_yoy, tab_raw = st.tabs(
+tab_sales, tab_walkin, tab_limechat, tab_product, tab_yoy, tab_raw = st.tabs(
     [
-        "📈 Trends Charts",
         "🏬 Sales Tab",
         "🚶 Walkin Tab",
         "💬 LimeChat Tab",
