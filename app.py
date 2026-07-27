@@ -480,15 +480,15 @@ def tag_sales_walkin_conversion(walkins_df, sales_df, walk_key_col, sales_key_co
         wdf["Sales_Walkin_Tag"] = "Not Converted"
         return wdf
     sdf = sales_df[[sales_key_col, sales_date_col]].dropna(subset=[sales_key_col]).copy()
-    sdf["Day"] = sdf[sales_date_col].dt.date
-    sdf = sdf[[sales_key_col, "Day"]].drop_duplicates()
+    sdf["Month"] = sdf[sales_date_col].dt.strftime("%Y-%m")
+    sdf = sdf[[sales_key_col, "Month"]].drop_duplicates()
     sdf["_matched"] = "Converted"
     sdf = sdf.rename(columns={sales_key_col: walk_key_col})
 
-    wdf["Day"] = wdf[walk_date_col].dt.date
-    wdf = wdf.merge(sdf, on=[walk_key_col, "Day"], how="left")
+    wdf["Month"] = wdf[walk_date_col].dt.strftime("%Y-%m")
+    wdf = wdf.merge(sdf, on=[walk_key_col, "Month"], how="left")
     wdf["Sales_Walkin_Tag"] = wdf["_matched"].fillna("Not Converted")
-    wdf = wdf.drop(columns=["_matched", "Day"])
+    wdf = wdf.drop(columns=["_matched", "Month"])
     return wdf
 
 
@@ -1037,8 +1037,9 @@ st.markdown("---")
 # =====================================================
 # TABS
 # =====================================================
-tab_sales, tab_walkin, tab_limechat, tab_product, tab_yoy, tab_raw = st.tabs(
+tab_trends, tab_sales, tab_walkin, tab_limechat, tab_product, tab_yoy, tab_raw = st.tabs(
     [
+        "📈 Trends Charts",
         "🏬 Sales Tab",
         "🚶 Walkin Tab",
         "💬 LimeChat Tab",
@@ -1047,6 +1048,36 @@ tab_sales, tab_walkin, tab_limechat, tab_product, tab_yoy, tab_raw = st.tabs(
         "📄 Raw Data"
     ]
 )
+
+# ---------------- TRENDS CHARTS ----------------
+# Kept lean: only the two core trend lines. The "New vs Repeat" 3-key
+# groupby was dropped per request — it's the heaviest of the three and
+# least essential; New/Repeat splits are already available store-wise
+# and associate-wise in the Sales/Walkin tabs.
+with tab_trends:
+    trend_sales = sales[sales[SALES_STORE_COL].isin(selected_stores)] if selected_stores else sales
+    trend_walk = walkins[walkins[WALKIN_STORE_COL].isin(selected_stores)] if selected_stores else walkins
+
+    st.markdown('<div class="section-kicker">Sales Trend</div>', unsafe_allow_html=True)
+    m_sales = trend_sales.groupby(["Month_Sort", "Month_Label"], as_index=False)[SALES_NET_COL].sum().sort_values("Month_Sort")
+    m_sales["Net Sales (₹ Cr)"] = to_cr(m_sales[SALES_NET_COL])
+    if not m_sales.empty:
+        fig = px.area(m_sales, x="Month_Label", y="Net Sales (₹ Cr)", markers=True)
+        fig.update_traces(line_color=NAVY, fillcolor="rgba(92,26,43,0.10)", marker=dict(color=GOLD, size=7))
+        fig.update_layout(hovermode="x unified")
+        st.plotly_chart(style_fig(fig, show_legend=False, category_count=len(m_sales)), use_container_width=True)
+    else:
+        st.info("No sales data for this selection.")
+
+    st.markdown('<div class="section-kicker">Walkin Trend</div>', unsafe_allow_html=True)
+    m_walk = trend_walk.groupby(["Month_Sort", "Month_Label"], as_index=False)["Customer_Key"].nunique().sort_values("Month_Sort").rename(columns={"Customer_Key": "Unique Walk-ins"})
+    if not m_walk.empty:
+        fig2 = px.area(m_walk, x="Month_Label", y="Unique Walk-ins", markers=True)
+        fig2.update_traces(line_color=NAVY, fillcolor="rgba(92,26,43,0.10)", marker=dict(color=GOLD, size=7))
+        fig2.update_layout(hovermode="x unified")
+        st.plotly_chart(style_fig(fig2, show_legend=False, category_count=len(m_walk)), use_container_width=True)
+    else:
+        st.info("No walk-in data for this selection.")
 
 # ---------------- SALES TAB ----------------
 with tab_sales:
