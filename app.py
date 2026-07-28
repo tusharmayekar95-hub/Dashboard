@@ -825,11 +825,13 @@ def build_store_table(sales_df, walkins_df, targets_df):
     if s.empty:
         return s
     if not w.empty:
-        w = w.rename(columns={WALKIN_STORE_COL: SALES_STORE_COL})[[SALES_STORE_COL, "Total_Unique_Walkin"]]
+        w = w.rename(columns={WALKIN_STORE_COL: SALES_STORE_COL})[[SALES_STORE_COL, "Total_Unique_Walkin", "New_Walkin"]]
         s = s.merge(w, on=SALES_STORE_COL, how="left")
     else:
         s["Total_Unique_Walkin"] = 0
+        s["New_Walkin"] = 0
     s["Total_Unique_Walkin"] = s["Total_Unique_Walkin"].fillna(0)
+    s["New_Walkin"] = s["New_Walkin"].fillna(0)
 
     # ---- Conversion %: StoreName|Month-YY|Number-or-Name key matched between Walk-in and Sales ----
     conv = conversion_metrics_by(walkins_df, sales_df, WALKIN_STORE_COL)
@@ -848,7 +850,11 @@ def format_sales_table(df, group_col):
         group_col: group_col, "Revenue": "Revenue", "Unique_Invoice": "Unique Invoice",
         "Unique_Customer": "Unique Customer", "New_Customer_Count": "New Customer Count",
         "Repeat_Customer_Count": "Repeat Customer Count", "Revenue_From_New": "Revenue From New Customer",
-        "Revenue_From_Repeat": "Revenue From Repeat Customer", "Total_Unique_Walkin": "Total Walkin",
+        "Revenue_From_Repeat": "Revenue From Repeat Customer",
+        # "Total Walkin" = unique NEW customer count from the walk-in table
+        # (New Customer = Unique Customer). The New+Repeat combined total
+        # is kept as its own column, "Total Customer".
+        "New_Walkin": "Total Walkin", "Total_Unique_Walkin": "Total Customer",
     })
     for col in ["Revenue", "Target", "Shortfall", "Revenue From New Customer", "Revenue From Repeat Customer"]:
         if col in d.columns:
@@ -862,7 +868,7 @@ def format_sales_table(df, group_col):
         d["UPT"] = d["UPT"].apply(lambda v: f"{v:.2f}" if pd.notna(v) else "N/A")
     cols_order = [c for c in [
         group_col, "Target", "Revenue", "Ach %", "Shortfall", "Unique Invoice", "ATV", "UPT",
-        "Total Walkin", "Unique Customer", "Conversion %", "New Customer Count", "Repeat Customer Count",
+        "Total Walkin", "Total Customer", "Unique Customer", "Conversion %", "New Customer Count", "Repeat Customer Count",
         "New %", "Repeat %", "Revenue From New Customer", "Revenue From Repeat Customer",
     ] if c in d.columns]
     return d[cols_order]
@@ -1078,7 +1084,10 @@ render_kpi(r2[2], "📦", "UPT", f"{upt:.2f}")
 render_kpi(r2[3], "🔄", "Sales_Walkin Tag (Converted)", f"{converted_walkins:,}")
 
 r3 = st.columns(4)
-render_kpi(r3[0], "🚶", "Total Walkin", f"{total_walkins_kpi:,}")
+# "Total Walkin" here = unique NEW customer count from the Walk-in table
+# (New Customer = Unique Customer). The true New+Repeat total is shown
+# separately below as "Total Unique Walkin" / in the store table as "Total Customer".
+render_kpi(r3[0], "🚶", "Total Walkin", f"{walkin_new:,}")
 render_kpi(r3[1], "👤", "Unique Customer", f"{unique_customers:,}")
 render_kpi(r3[2], "🎯", "Conversion %", fmt_pct(conversion_pct))
 render_kpi(r3[3], "🆕", "New %", fmt_pct(new_pct))
@@ -1179,9 +1188,10 @@ with tab_sales:
             )
             if walk_assoc_col:
                 w_assoc = walkin_metrics_by(filtered_walkins.dropna(subset=[walk_assoc_col]), walk_assoc_col)
-                w_assoc = w_assoc.rename(columns={walk_assoc_col: assoc_col})[[assoc_col, "Total_Unique_Walkin"]] if not w_assoc.empty else pd.DataFrame(columns=[assoc_col, "Total_Unique_Walkin"])
+                w_assoc = w_assoc.rename(columns={walk_assoc_col: assoc_col})[[assoc_col, "Total_Unique_Walkin", "New_Walkin"]] if not w_assoc.empty else pd.DataFrame(columns=[assoc_col, "Total_Unique_Walkin", "New_Walkin"])
                 assoc_table = assoc_table.merge(w_assoc, on=assoc_col, how="left")
                 assoc_table["Total_Unique_Walkin"] = assoc_table["Total_Unique_Walkin"].fillna(0)
+                assoc_table["New_Walkin"] = assoc_table["New_Walkin"].fillna(0)
 
                 # ---- Conversion %: StoreName|Month-YY|Number-or-Name key matched between Walk-in and Sales ----
                 conv_assoc = conversion_metrics_by(
