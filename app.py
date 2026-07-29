@@ -518,6 +518,33 @@ def tag_new_repeat(df, store_col, key_col, month_sort_col, group_by_store=True):
     return df
 
 
+def unique_status_by(df, key_col="NewRepeat_Key", status_col="New/Repeat", group_col=None):
+    """Collapses rows down to exactly ONE status per customer, per scope:
+    'New' if that customer has ANY row tagged New within the scope (i.e. their
+    true first-ever visit — decided globally in tag_new_repeat — falls inside
+    this slice), else 'Repeat'.
+
+    Why this is needed: a customer can have a 'New' row in Month 1 and a
+    'Repeat' row in Month 2. If a view spans both months, counting
+    nunique(customer) separately within the New rows and within the Repeat
+    rows counts that person TWICE (once in each bucket), so New + Repeat can
+    come out bigger than Unique Customer. This resolves each customer to one
+    bucket per scope first, so New_count + Repeat_count == Unique_count
+    always holds — at overall, month, store, and associate level alike.
+
+    group_col=None -> resolve globally (no grouping), used for headline KPIs.
+    group_col="Store" (etc.) -> resolve per group, used for store/associate tables.
+    """
+    sub = df.dropna(subset=[key_col, status_col]).copy()
+    cols = [group_col, key_col] if group_col else [key_col]
+    if sub.empty:
+        return pd.DataFrame(columns=cols + ["Status"])
+    sub["_is_new"] = sub[status_col] == "New"
+    agg = sub.groupby(cols)["_is_new"].max().reset_index()
+    agg["Status"] = np.where(agg["_is_new"], "New", "Repeat")
+    return agg.drop(columns=["_is_new"])
+
+
 def tag_sales_walkin_conversion(walkins_df, sales_df, walk_key_col, sales_key_col, walk_date_col, sales_date_col):
     wdf = walkins_df.copy()
     if sales_df.empty or wdf.empty:
@@ -766,10 +793,14 @@ def sales_metrics_by(df, group_col, targets_df=None, target_group_col=None):
     out["ATV"] = out["Revenue"] / out["Unique_Invoice"].replace(0, np.nan)
     out["UPT"] = out["Qty"] / out["Unique_Invoice"].replace(0, np.nan)
 
-    uc = df.groupby(group_col)["Customer_Key"].nunique().rename("Unique_Customer")
+    # Unique Customer / New / Repeat all use NewRepeat_Key (Number, else Store|Name)
+    # via unique_status_by, so New_Customer_Count + Repeat_Customer_Count == Unique_Customer.
+    status = unique_status_by(df, group_col=group_col)
+    uc = status.groupby(group_col)["NewRepeat_Key"].size().rename("Unique_Customer")
     out = out.merge(uc, on=group_col, how="left")
+    out["Unique_Customer"] = out["Unique_Customer"].fillna(0)
 
-    nr = df.dropna(subset=["New/Repeat"]).groupby([group_col, "New/Repeat"])["Customer_Key"].nunique().unstack(fill_value=0)
+    nr = status.groupby([group_col, "Status"]).size().unstack(fill_value=0)
     for c in ["New", "Repeat"]:
         if c not in nr.columns:
             nr[c] = 0
@@ -804,8 +835,11 @@ def sales_metrics_by(df, group_col, targets_df=None, target_group_col=None):
 def walkin_metrics_by(df, group_col):
     if df.empty or group_col not in df.columns:
         return pd.DataFrame()
-    tot = df.groupby(group_col)["Customer_Key"].nunique().rename("Total_Unique_Walkin").reset_index()
-    nr = df.dropna(subset=["New/Repeat"]).groupby([group_col, "New/Repeat"])["Customer_Key"].nunique().unstack(fill_value=0)
+    # Total_Unique_Walkin / New_Walkin / Repeat_Walkin all use NewRepeat_Key via
+    # unique_status_by, so New_Walkin + Repeat_Walkin == Total_Unique_Walkin.
+    status = unique_status_by(df, group_col=group_col)
+    tot = status.groupby(group_col)["NewRepeat_Key"].size().rename("Total_Unique_Walkin").reset_index()
+    nr = status.groupby([group_col, "Status"]).size().unstack(fill_value=0)
     for c in ["New", "Repeat"]:
         if c not in nr.columns:
             nr[c] = 0
@@ -899,10 +933,12 @@ def product_metrics_by(df, group_col):
     out["ATV"] = out["Revenue"] / out["Unique_Invoice"].replace(0, np.nan)
     out["UPT"] = out["Qty"] / out["Unique_Invoice"].replace(0, np.nan)
 
-    uc = scoped.groupby(group_col)["Customer_Key"].nunique().rename("Unique_Customer")
+    status = unique_status_by(scoped, group_col=group_col)
+    uc = status.groupby(group_col)["NewRepeat_Key"].size().rename("Unique_Customer")
     out = out.merge(uc, on=group_col, how="left")
+    out["Unique_Customer"] = out["Unique_Customer"].fillna(0)
 
-    nr = scoped.dropna(subset=["New/Repeat"]).groupby([group_col, "New/Repeat"])["Customer_Key"].nunique().unstack(fill_value=0)
+    nr = status.groupby([group_col, "Status"]).size().unstack(fill_value=0)
     for c in ["New", "Repeat"]:
         if c not in nr.columns:
             nr[c] = 0
@@ -977,28 +1013,26 @@ if period_target > 0:
 else:
     achievement_display, shortfall_display, target_display = "N/A", "N/A", "N/A"
 
-unique_customers = filtered_sales["Customer_Key"].nunique()
-total_walkins_kpi = filtered_walkins["Customer_Key"].nunique()
+# Unique Customer / New / Repeat all resolved via NewRepeat_Key (Number, else Store|Name)
+# so New_customer_count + Repeat_customer_count == Unique_customers, always.
+sales_status_kpi = unique_status_by(filtered_sales)
+unique_customers = sales_status_kpi["NewRepeat_Key"].nunique()
+walk_status_kpi = unique_status_by(filtered_walkins)
+total_walkins_kpi = walk_status_kpi["NewRepeat_Key"].nunique()
 
 # ---- Sales Conversion Count/%: overall KPI ----
-# Total Unique Walkin here is a pure headcount by Number-or-Name only (no store, no month) —
-# a customer visiting 2 stores, or the same store across 2 months, still counts as ONE person.
-# Drilling down to a specific month (sidebar filter) or a specific store (Store-wise table)
-# still gives the accurate, granular breakdown — those use Conversion_Key and are unaffected
-# by this choice (store-grouping already makes the key-choice a no-op at that level).
-# NOTE: because the numerator still matches on Store+Month (Conversion_Key) while this
-# denominator does not, Conversion % can technically exceed 100% if a customer converts at
-# multiple stores/months within the same "All months" view — this is the accepted trade-off
-# for keeping the headline KPI a true distinct-person count.
+# Numerator and denominator both keyed on Conversion_Key (Store|Month-YY|Number-or-Name),
+# the same key used in Sales & Walk-in for conversion matching, so they're apples-to-apples
+# and Conversion % is always bounded 0-100%.
 _sales_conversion_keys_kpi = set(filtered_sales["Conversion_Key"].dropna())
 sales_conversion_count = filtered_walkins[
     filtered_walkins["Conversion_Key"].isin(_sales_conversion_keys_kpi)
 ]["Conversion_Key"].nunique()
-total_walkin_headcount = filtered_walkins["Customer_Key"].nunique()
+total_walkin_headcount = filtered_walkins["Conversion_Key"].nunique()
 conversion_pct = sales_conversion_count / total_walkin_headcount * 100 if total_walkin_headcount > 0 else 0
 
-new_customer_count = filtered_sales[filtered_sales["New/Repeat"] == "New"]["Customer_Key"].nunique()
-repeat_customer_count = filtered_sales[filtered_sales["New/Repeat"] == "Repeat"]["Customer_Key"].nunique()
+new_customer_count = (sales_status_kpi["Status"] == "New").sum()
+repeat_customer_count = (sales_status_kpi["Status"] == "Repeat").sum()
 tot_nr = new_customer_count + repeat_customer_count
 new_pct = new_customer_count / tot_nr * 100 if tot_nr > 0 else 0
 repeat_pct = repeat_customer_count / tot_nr * 100 if tot_nr > 0 else 0
@@ -1008,8 +1042,8 @@ revenue_from_repeat = filtered_sales[filtered_sales["New/Repeat"] == "Repeat"][S
 
 converted_walkins = filtered_walkins[filtered_walkins["Sales_Walkin_Tag"] == "Converted"]["Customer_Key"].nunique()
 
-walkin_new = filtered_walkins[filtered_walkins["New/Repeat"] == "New"]["Customer_Key"].nunique()
-walkin_repeat = filtered_walkins[filtered_walkins["New/Repeat"] == "Repeat"]["Customer_Key"].nunique()
+walkin_new = (walk_status_kpi["Status"] == "New").sum()
+walkin_repeat = (walk_status_kpi["Status"] == "Repeat").sum()
 walkin_tot_nr = walkin_new + walkin_repeat
 walkin_new_pct = walkin_new / walkin_tot_nr * 100 if walkin_tot_nr > 0 else 0
 walkin_repeat_pct = walkin_repeat / walkin_tot_nr * 100 if walkin_tot_nr > 0 else 0
@@ -1148,7 +1182,7 @@ with tab_trends:
         st.info("No sales data for this selection.")
 
     st.markdown('<div class="section-kicker">Walkin Trend</div>', unsafe_allow_html=True)
-    m_walk = trend_walk.groupby(["Month_Sort", "Month_Label"], as_index=False)["Customer_Key"].nunique().sort_values("Month_Sort").rename(columns={"Customer_Key": "Unique Walk-ins"})
+    m_walk = trend_walk.groupby(["Month_Sort", "Month_Label"], as_index=False)["NewRepeat_Key"].nunique().sort_values("Month_Sort").rename(columns={"NewRepeat_Key": "Unique Walk-ins"})
     if not m_walk.empty:
         fig2 = px.area(m_walk, x="Month_Label", y="Unique Walk-ins", markers=True)
         fig2.update_traces(line_color=NAVY, fillcolor="rgba(92,26,43,0.10)", marker=dict(color=GOLD, size=7))
