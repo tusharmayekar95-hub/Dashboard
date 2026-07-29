@@ -420,22 +420,6 @@ def _normalize_name(x):
     return re.sub(r"\s+", " ", str(x)).strip().upper()
 
 
-def build_customer_key(df, name_col, phone_col):
-    if phone_col and phone_col in df.columns:
-        phone = df[phone_col].apply(_normalize_phone)
-    else:
-        phone = pd.Series([""] * len(df), index=df.index)
-    if name_col and name_col in df.columns:
-        name = df[name_col].apply(_normalize_name)
-    else:
-        name = pd.Series([""] * len(df), index=df.index)
-
-    key = phone.where(phone != "", "NAME::" + name)
-    key = key.where(key != "NAME::", None)
-    key = key.where(key.notna() & (key != ""), None)
-    return key
-
-
 def build_new_repeat_key(df, store_col, name_col, phone_col):
     """Key used ONLY for New/Repeat tagging: Number if present (global, cross-store),
     else Store|Name (store-scoped fallback) — matches Excel's Helper-column logic."""
@@ -614,15 +598,13 @@ def prepare_data():
     if team_targets.empty:
         missing_cols_warning.append("Team Target tab: not found, empty, or missing Store/Agent/Target/Month-YY columns.")
 
-    # ---- build unique customer keys ----
-    sales["Customer_Key"] = build_customer_key(sales, sales_name_col, sales_phone_col)
-    walkins["Customer_Key"] = build_customer_key(walkins, walkin_name_col, walkin_phone_col)
-
     # ---- Sales Conversion key: StoreName|Month-YY|Number (falls back to Name if Number missing) ----
     sales["Conversion_Key"] = build_conversion_key(sales, SALES_STORE_COL, "Month_Label", sales_name_col, sales_phone_col)
     walkins["Conversion_Key"] = build_conversion_key(walkins, WALKIN_STORE_COL, "Month_Label", walkin_name_col, walkin_phone_col)
 
     # ---- New/Repeat key: Number if present (global, cross-store), else Store|Name (store-scoped) ----
+    # This is the SINGLE identity key for Sales & Walk-in — used for Unique Customer counts,
+    # New/Repeat tagging, and same-day Sales/Walk-in conversion matching alike.
     sales["NewRepeat_Key"] = build_new_repeat_key(sales, SALES_STORE_COL, sales_name_col, sales_phone_col)
     walkins["NewRepeat_Key"] = build_new_repeat_key(walkins, WALKIN_STORE_COL, walkin_name_col, walkin_phone_col)
 
@@ -634,7 +616,7 @@ def prepare_data():
 
     # ---- Sales_Walkin Tag: walk-in converted if matched in Sales same day ----
     walkins = tag_sales_walkin_conversion(
-        walkins, sales, "Customer_Key", "Customer_Key", WALKIN_DATE_COL, SALES_DATE_COL
+        walkins, sales, "NewRepeat_Key", "NewRepeat_Key", WALKIN_DATE_COL, SALES_DATE_COL
     )
 
     # ---- LimeChat → Sales conversion: LimeChat Phone Number vs Sales Mobile Number, same month ----
@@ -1040,7 +1022,7 @@ repeat_pct = repeat_customer_count / tot_nr * 100 if tot_nr > 0 else 0
 revenue_from_new = filtered_sales[filtered_sales["New/Repeat"] == "New"][SALES_NET_COL].sum()
 revenue_from_repeat = filtered_sales[filtered_sales["New/Repeat"] == "Repeat"][SALES_NET_COL].sum()
 
-converted_walkins = filtered_walkins[filtered_walkins["Sales_Walkin_Tag"] == "Converted"]["Customer_Key"].nunique()
+converted_walkins = filtered_walkins[filtered_walkins["Sales_Walkin_Tag"] == "Converted"]["NewRepeat_Key"].nunique()
 
 walkin_new = (walk_status_kpi["Status"] == "New").sum()
 walkin_repeat = (walk_status_kpi["Status"] == "Repeat").sum()
